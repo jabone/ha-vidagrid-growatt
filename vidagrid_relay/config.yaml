@@ -1,0 +1,27 @@
+name: "VidaGrid Relay (Chromium)"
+version: "1.0.0"
+slug: "vidagrid_relay"
+description: >-
+  A full Chromium browser, reachable from a web page (no monitor needed),
+  that stays logged into the VidaGrid/Growatt portal behind Base Power
+  batteries and relays fresh telemetry to the VidaGrid Growatt integration's
+  webhook every few minutes -- so its sensors keep working without a manual
+  token paste every ~20 minutes. See the integration's README.md for the
+  one-time login step.
+url: "https://github.com/jabone/ha-vidagrid-growatt"
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: application
+boot: auto
+ports:
+  3000/tcp: 3000
+  3001/tcp: 3001
+ports_description:
+  3000/tcp: "Web-based Chromium screen (HTTP) -- open this once to log in."
+  3001/tcp: "Web-based Chromium screen (HTTPS)"
+environment:
+  PUID: "1000"
+  PGID: "1000"
+  TZ: "Etc/UTC"
