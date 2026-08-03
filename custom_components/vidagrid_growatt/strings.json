@@ -1,0 +1,33 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect VidaGrid (Growatt) Account",
+        "description": "This portal's login requires a CAPTCHA, so paste in the Bearer token your browser already has after you sign in manually. {token_help}",
+        "data": {
+          "bearer_token": "Bearer Token",
+          "base_url": "Portal Base URL",
+          "site_id": "Site ID (from the portal URL, e.g. site_detail/1224587)",
+          "inverter_sns": "Inverter Serial Number(s), comma-separated"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate VidaGrid",
+        "description": "Your VidaGrid token expired (tokens typically last ~30 days). Sign into the portal again and paste a fresh Bearer token.",
+        "data": {
+          "bearer_token": "Bearer Token"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Token was rejected. Make sure you copied the full value after 'Bearer ' with no extra spaces.",
+      "cannot_connect": "Could not reach the VidaGrid portal. Check the base URL and your internet connection.",
+      "no_inverters": "Enter at least one inverter serial number.",
+      "unknown": "Unexpected error. Check the Home Assistant logs for details."
+    },
+    "abort": {
+      "already_configured": "This site is already configured.",
+      "reauth_successful": "Re-authentication was successful."
+    }
+  }
+}
