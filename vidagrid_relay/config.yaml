@@ -1,13 +1,14 @@
 name: "VidaGrid Relay (Chromium)"
-version: "1.0.0"
+version: "2.0.0"
 slug: "vidagrid_relay"
 description: >-
   A full Chromium browser, reachable from a web page (no monitor needed),
   that stays logged into the VidaGrid/Growatt portal behind Base Power
   batteries and relays fresh telemetry to the VidaGrid Growatt integration's
   webhook every few minutes -- so its sensors keep working without a manual
-  token paste every ~20 minutes. See the integration's README.md for the
-  one-time login step.
+  token paste every ~20 minutes. Set your webhook URL and inverter serial
+  numbers in this add-on's Configuration tab, then see the integration's
+  README.md for the one-time login step.
 url: "https://github.com/jabone/ha-vidagrid-growatt"
 arch:
   - aarch64
@@ -25,3 +26,10 @@ environment:
   PUID: "1000"
   PGID: "1000"
   TZ: "Etc/UTC"
+options:
+  webhook_url: ""
+  inverter_sns: []
+schema:
+  webhook_url: "url"
+  inverter_sns:
+    - "str"
