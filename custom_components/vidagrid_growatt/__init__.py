@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
@@ -40,6 +41,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         webhook_id = entry.data[CONF_WEBHOOK_ID]
 
     vidagrid_webhook.register(hass, webhook_id, coordinator)
+
+    persistent_notification.async_create(
+        hass,
+        (
+            f"Webhook path for the browser relay script:\n\n"
+            f"`/api/webhook/{webhook_id}`\n\n"
+            f"Full URL (replace the host if this isn't your Home Assistant "
+            f"address): `http://YOUR-HA-ADDRESS:8123/api/webhook/{webhook_id}`\n\n"
+            f"See this integration's README.md for how to use it."
+        ),
+        title="VidaGrid Growatt: webhook ready",
+        notification_id=f"vidagrid_growatt_webhook_{entry.entry_id}",
+    )
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
