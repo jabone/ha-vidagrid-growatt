@@ -1,19 +1,21 @@
 """Minimal REST client for the VidaGrid (Growatt white-label) portal API.
 
-This talks to undocumented endpoints discovered via browser network
-inspection. The exact JSON field names returned by each endpoint were NOT
-captured (the login page's CAPTCHA and the platform's own credential
-protections meant we could only confirm endpoint paths, HTTP methods, and
-that auth is a Bearer token -- not the full response schema). Because of
-that, `_dig()` below searches the raw response defensively across a list of
-plausible key-name variants (camelCase / snake_case / the exact label text
-shown in the portal's UI) instead of assuming one fixed shape.
+Field mapping in this file is based on a real captured response from a
+live 2-inverter, no-solar Base Power account (see the "Raw Data" diagnostic
+sensors this integration exposes, which is how the shapes below were
+confirmed). Two distinct shapes are in play:
 
-If a value doesn't show up under any of the guessed keys, it will simply be
-None and the raw payload is still made available as `raw` on the returned
-dict for diagnostics (visible via the "Raw Data" diagnostic sensors and in
-debug logs), the same troubleshooting pattern used for the Base Power
-integration fixes.
+- `/diagram`: a flat dict of camelCase telemetry keys directly under
+  `data` (e.g. `data["loadPower"]`).
+- `/battery`: `data` is a list of labeled *sections*
+  (`{"title": ..., "children": [{"name": ..., "value": ...}, ...]}`),
+  matching the collapsible panels shown in the portal's own "Battery" tab.
+  Values are looked up by their exact on-screen label (e.g. "Discharge
+  Power") inside the "Summary Information" section, not by a JSON key.
+
+Both endpoints wrap their real payload in `{"code": 0, "msg": "SUCCESS",
+"data": ...}`, so this account's data always lives one level down from the
+plain fetch.
 """
 
 from __future__ import annotations
@@ -41,26 +43,33 @@ class VidaGridApiError(Exception):
     """Raised for any other non-2xx response or transport failure."""
 
 
-def _dig(data: Any, *candidates: str) -> Any:
-    """Best-effort lookup of a value under any of several possible key names.
+def _payload(raw: Any) -> Any:
+    """Unwrap the `{"code": 0, "msg": "SUCCESS", "data": ...}` envelope."""
+    if isinstance(raw, dict) and "data" in raw:
+        return raw["data"]
+    return raw
 
-    Searches the top level of `data` first, then one level of nesting into
-    any dict-valued fields (covers the common "wrapped in a `data` key"
-    pattern this API's billing-style endpoints have shown elsewhere).
-    """
-    if not isinstance(data, dict):
+
+def _find_section(sections: Any, title: str) -> dict[str, Any] | None:
+    """Find one labeled section (by exact title) in the battery endpoint's tree."""
+    if not isinstance(sections, list):
         return None
-
-    for key in candidates:
-        if key in data:
-            return data[key]
-
-    for value in data.values():
-        if isinstance(value, dict):
-            for key in candidates:
-                if key in value:
-                    return value[key]
+    for section in sections:
+        if isinstance(section, dict) and section.get("title") == title:
+            return section
     return None
+
+
+def _children_by_name(section: dict[str, Any] | None) -> dict[str, Any]:
+    """Flatten a section's `children` list into a {label: value} dict."""
+    result: dict[str, Any] = {}
+    if not section:
+        return result
+    for child in section.get("children", []) or []:
+        name = child.get("name")
+        if name:
+            result[name] = child.get("value")
+    return result
 
 
 class VidaGridApiClient:
@@ -110,17 +119,20 @@ class VidaGridApiClient:
         raw = await self._get(EP_INVERTER_BATTERY.format(sn=sn))
         _LOGGER.debug("VidaGrid battery raw response for %s: %s", sn, raw)
 
+        sections = _payload(raw)
+        summary = _children_by_name(_find_section(sections, "Summary Information"))
+
         parsed = {
-            "discharge_power_w": _dig(raw, "dischargePower", "discharge_power", "dischargePowerW"),
-            "charge_power_w": _dig(raw, "chargePower", "charge_power", "chargePowerW"),
-            "bdc1_sn": _dig(raw, "bdc1Sn", "bdc1_sn", "bdcSn1"),
-            "bdc2_sn": _dig(raw, "bdc2Sn", "bdc2_sn", "bdcSn2"),
-            "connect_status": _dig(raw, "connectStatus", "connect_status"),
-            "bus_ref_v": _dig(raw, "busRef", "bus_ref", "busVoltage"),
-            "bms_type": _dig(raw, "bmsType", "bms_type"),
-            "ac_to_load_w": _dig(raw, "acToLoad", "ac_to_load", "acToLoadW"),
-            "bdc_link_num": _dig(raw, "bdcLinkNum", "bdc_link_num"),
-            "pack_num": _dig(raw, "packNum", "pack_num"),
+            "discharge_power_w": summary.get("Discharge Power"),
+            "charge_power_w": summary.get("Charge Power"),
+            "bdc1_sn": summary.get("BDC1 SN") or None,
+            "bdc2_sn": summary.get("BDC2 SN") or None,
+            "connect_status": summary.get("Connect Status"),
+            "bus_ref_v": summary.get("Bus Ref"),
+            "bms_type": summary.get("BMS Type"),
+            "ac_to_load_w": summary.get("AC To Load"),
+            "bdc_link_num": summary.get("BDC Link Num"),
+            "pack_num": summary.get("Pack Num"),
             "raw": raw,
         }
         return parsed
@@ -130,15 +142,32 @@ class VidaGridApiClient:
         raw = await self._get(EP_INVERTER_DIAGRAM.format(sn=sn))
         _LOGGER.debug("VidaGrid diagram raw response for %s: %s", sn, raw)
 
+        data = _payload(raw)
+        if not isinstance(data, dict):
+            data = {}
+
+        discharge = data.get("dischargePower") or 0
+        charge = data.get("chargePower") or 0
+        power_to_grid = data.get("powerToGrid") or 0
+        power_to_user = data.get("powerToUser") or 0
+        soc_bdc1 = data.get("socBdc1")
+        soc_bdc2 = data.get("socBdc2")
+
         parsed = {
-            "load_w": _dig(raw, "loadPower", "load_power", "load", "loadW"),
-            "pv_w": _dig(raw, "pvPower", "pv_power", "pv", "pvW"),
-            "grid_w": _dig(raw, "gridPower", "grid_power", "grid", "gridW"),
-            "battery_w": _dig(raw, "batteryPower", "battery_power", "battery", "batteryW"),
-            "battery_soc_percent": _dig(raw, "batterySoc", "battery_soc", "soc", "batteryPercent"),
-            "grid_status": _dig(raw, "gridStatus", "grid_status", "onGrid", "status"),
-            "scenario": _dig(raw, "scenario"),
-            "ems_priority": _dig(raw, "emsPriority", "ems_priority"),
+            "load_w": data.get("loadPower"),
+            "pv_w": data.get("pvPower"),
+            # Positive = importing from grid, negative = exporting to grid.
+            "grid_w": (power_to_user - power_to_grid) if (power_to_user or power_to_grid) else 0,
+            # Positive = battery discharging (powering the home), negative = charging.
+            "battery_w": discharge - charge,
+            "battery_soc_percent": soc_bdc1 if soc_bdc1 else soc_bdc2,
+            # The portal itself shows "On-Grid"/"Off-Grid" based on this flag.
+            "grid_status": data.get("minGridConnection"),
+            "equipment_model": data.get("equipmentModel"),
+            # NOTE: `is_online` in this payload was 0 even while every other
+            # field reflected live, current telemetry -- matches the
+            # cosmetic "Offline" bug seen in the portal's own Devices list.
+            # Deliberately not used for anything; kept in raw for reference.
             "raw": raw,
         }
         return parsed
