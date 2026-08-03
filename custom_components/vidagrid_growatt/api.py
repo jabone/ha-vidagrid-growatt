@@ -72,6 +72,67 @@ def _children_by_name(section: dict[str, Any] | None) -> dict[str, Any]:
     return result
 
 
+def parse_battery_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a raw `/battery` endpoint response into known fields.
+
+    Pure function (no I/O) so it can be shared by both the polling HTTP
+    client below and the webhook handler in webhook.py, which receives the
+    same raw JSON shape pushed from the browser userscript instead of
+    fetching it itself.
+    """
+    sections = _payload(raw)
+    summary = _children_by_name(_find_section(sections, "Summary Information"))
+
+    return {
+        "discharge_power_w": summary.get("Discharge Power"),
+        "charge_power_w": summary.get("Charge Power"),
+        "bdc1_sn": summary.get("BDC1 SN") or None,
+        "bdc2_sn": summary.get("BDC2 SN") or None,
+        "connect_status": summary.get("Connect Status"),
+        "bus_ref_v": summary.get("Bus Ref"),
+        "bms_type": summary.get("BMS Type"),
+        "ac_to_load_w": summary.get("AC To Load"),
+        "bdc_link_num": summary.get("BDC Link Num"),
+        "pack_num": summary.get("Pack Num"),
+        "raw": raw,
+    }
+
+
+def parse_diagram_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a raw `/diagram` endpoint response into known fields.
+
+    Pure function -- see parse_battery_raw() docstring.
+    """
+    data = _payload(raw)
+    if not isinstance(data, dict):
+        data = {}
+
+    discharge = data.get("dischargePower") or 0
+    charge = data.get("chargePower") or 0
+    power_to_grid = data.get("powerToGrid") or 0
+    power_to_user = data.get("powerToUser") or 0
+    soc_bdc1 = data.get("socBdc1")
+    soc_bdc2 = data.get("socBdc2")
+
+    return {
+        "load_w": data.get("loadPower"),
+        "pv_w": data.get("pvPower"),
+        # Positive = importing from grid, negative = exporting to grid.
+        "grid_w": (power_to_user - power_to_grid) if (power_to_user or power_to_grid) else 0,
+        # Positive = battery discharging (powering the home), negative = charging.
+        "battery_w": discharge - charge,
+        "battery_soc_percent": soc_bdc1 if soc_bdc1 else soc_bdc2,
+        # The portal itself shows "On-Grid"/"Off-Grid" based on this flag.
+        "grid_status": data.get("minGridConnection"),
+        "equipment_model": data.get("equipmentModel"),
+        # NOTE: `is_online` in this payload was 0 even while every other
+        # field reflected live, current telemetry -- matches the
+        # cosmetic "Offline" bug seen in the portal's own Devices list.
+        # Deliberately not used for anything; kept in raw for reference.
+        "raw": raw,
+    }
+
+
 class VidaGridApiClient:
     """Thin async client for the VidaGrid inverter/battery REST endpoints."""
 
@@ -118,59 +179,13 @@ class VidaGridApiClient:
         """Fetch battery-pack detail for one inverter and normalize known fields."""
         raw = await self._get(EP_INVERTER_BATTERY.format(sn=sn))
         _LOGGER.debug("VidaGrid battery raw response for %s: %s", sn, raw)
-
-        sections = _payload(raw)
-        summary = _children_by_name(_find_section(sections, "Summary Information"))
-
-        parsed = {
-            "discharge_power_w": summary.get("Discharge Power"),
-            "charge_power_w": summary.get("Charge Power"),
-            "bdc1_sn": summary.get("BDC1 SN") or None,
-            "bdc2_sn": summary.get("BDC2 SN") or None,
-            "connect_status": summary.get("Connect Status"),
-            "bus_ref_v": summary.get("Bus Ref"),
-            "bms_type": summary.get("BMS Type"),
-            "ac_to_load_w": summary.get("AC To Load"),
-            "bdc_link_num": summary.get("BDC Link Num"),
-            "pack_num": summary.get("Pack Num"),
-            "raw": raw,
-        }
-        return parsed
+        return parse_battery_raw(raw)
 
     async def async_get_diagram(self, sn: str) -> dict[str, Any]:
         """Fetch the live energy-flow diagram data for one inverter."""
         raw = await self._get(EP_INVERTER_DIAGRAM.format(sn=sn))
         _LOGGER.debug("VidaGrid diagram raw response for %s: %s", sn, raw)
-
-        data = _payload(raw)
-        if not isinstance(data, dict):
-            data = {}
-
-        discharge = data.get("dischargePower") or 0
-        charge = data.get("chargePower") or 0
-        power_to_grid = data.get("powerToGrid") or 0
-        power_to_user = data.get("powerToUser") or 0
-        soc_bdc1 = data.get("socBdc1")
-        soc_bdc2 = data.get("socBdc2")
-
-        parsed = {
-            "load_w": data.get("loadPower"),
-            "pv_w": data.get("pvPower"),
-            # Positive = importing from grid, negative = exporting to grid.
-            "grid_w": (power_to_user - power_to_grid) if (power_to_user or power_to_grid) else 0,
-            # Positive = battery discharging (powering the home), negative = charging.
-            "battery_w": discharge - charge,
-            "battery_soc_percent": soc_bdc1 if soc_bdc1 else soc_bdc2,
-            # The portal itself shows "On-Grid"/"Off-Grid" based on this flag.
-            "grid_status": data.get("minGridConnection"),
-            "equipment_model": data.get("equipmentModel"),
-            # NOTE: `is_online` in this payload was 0 even while every other
-            # field reflected live, current telemetry -- matches the
-            # cosmetic "Offline" bug seen in the portal's own Devices list.
-            # Deliberately not used for anything; kept in raw for reference.
-            "raw": raw,
-        }
-        return parsed
+        return parse_diagram_raw(raw)
 
     async def async_get_production(self) -> dict[str, Any]:
         """Fetch the fleet-wide production summary (all inverters on the account)."""

@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import secrets
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from . import webhook as vidagrid_webhook
 from .api import VidaGridApiClient, VidaGridApiError, VidaGridAuthError
-from .const import CONF_BASE_URL, CONF_BEARER_TOKEN, CONF_INVERTER_SNS, DOMAIN
+from .const import CONF_BASE_URL, CONF_BEARER_TOKEN, CONF_INVERTER_SNS, CONF_WEBHOOK_ID, DOMAIN
 from .coordinator import VidaGridCoordinator
 
 PLATFORMS = ["sensor", "binary_sensor"]
@@ -26,11 +29,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except (VidaGridAuthError, VidaGridApiError) as err:
         raise ConfigEntryNotReady(str(err)) from err
 
+    # Generate a stable webhook_id once per entry (persisted so it survives
+    # reloads/restarts) for the browser userscript to push fresh data to.
+    if CONF_WEBHOOK_ID not in entry.data:
+        webhook_id = secrets.token_hex(16)
+        hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_WEBHOOK_ID: webhook_id}
+        )
+    else:
+        webhook_id = entry.data[CONF_WEBHOOK_ID]
+
+    vidagrid_webhook.register(hass, webhook_id, coordinator)
+
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+    entry.async_on_unload(lambda: vidagrid_webhook.unregister(hass, webhook_id))
     return True
 
 
