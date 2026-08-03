@@ -1,0 +1,67 @@
+// VidaGrid -> Home Assistant relay.
+//
+// Runs inside the VidaGrid portal page itself (as a content script), so it
+// shares the page's own live session. It reads whatever bearer token the
+// page currently holds from localStorage (the exact same thing the page's
+// own JS does for every request) and uses it to fetch fresh battery/diagram
+// data, then POSTs only that data -- never the token -- to a Home Assistant
+// webhook. As long as this tab/browser stays open and logged in, the token
+// itself can expire and refresh silently in the background; this script
+// re-reads it fresh on every cycle so it's never left holding a stale copy.
+
+(function () {
+  "use strict";
+
+  // ---- CONFIG: filled in for this install, see README.md to change ----
+  const HA_WEBHOOK_URL = "__HA_WEBHOOK_URL__";
+  const INVERTER_SNS = ["__INVERTER_SN_1__", "__INVERTER_SN_2__"];
+  const INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+  // -----------------------------------------------------------------------
+
+  function getAuthHeader() {
+    const raw = window.localStorage.getItem("authorization");
+    if (!raw) return null;
+    return raw.startsWith("Bearer ") ? raw : "Bearer " + raw;
+  }
+
+  async function relayOne(sn) {
+    const auth = getAuthHeader();
+    if (!auth) {
+      console.warn("[VidaGrid relay] no auth token found in localStorage yet");
+      return;
+    }
+    try {
+      const [batteryRes, diagramRes] = await Promise.all([
+        fetch(`/web/v1/inverter/${sn}/battery`, {
+          headers: { Authorization: auth, Accept: "application/json" },
+        }),
+        fetch(`/web/v1/inverter/${sn}/diagram`, {
+          headers: { Authorization: auth, Accept: "application/json" },
+        }),
+      ]);
+      const battery = await batteryRes.json();
+      const diagram = await diagramRes.json();
+
+      const resp = await fetch(HA_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sn, battery, diagram }),
+      });
+      console.log(
+        "[VidaGrid relay] pushed",
+        sn,
+        resp.ok ? "ok" : `HTTP ${resp.status}`
+      );
+    } catch (err) {
+      console.warn("[VidaGrid relay] failed for", sn, err);
+    }
+  }
+
+  function relayAll() {
+    INVERTER_SNS.forEach(relayOne);
+  }
+
+  // Small delay on first run so the page finishes its own initial load/auth.
+  setTimeout(relayAll, 5000);
+  setInterval(relayAll, INTERVAL_MS);
+})();
