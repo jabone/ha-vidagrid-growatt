@@ -39,7 +39,7 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Hold battery + diagram data for every configured inverter.
 
     Populated by a best-effort fallback poll and/or webhook pushes; never
-    raises out of `_async_update_data` after the very first successful
+    raises out of _async_update_data after the very first successful
     refresh, so a dead/expired pasted token doesn't flip every entity to
     unavailable -- they just hold their last real reading, same as the
     Base Power integration's own last-known-good caching fix.
@@ -63,6 +63,23 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             sn: {"battery": None, "diagram": None} for sn in inverter_sns
         }
         self._ever_succeeded = False
+        # Entities register themselves here (see sensor.py / binary_sensor.py)
+        # so ingest() can write their state directly, in addition to the
+        # normal coordinator listener notification. This is a defensive
+        # belt-and-suspenders measure: on 2026.8 beta core builds we observed
+        # async_set_updated_data()/async_update_listeners() silently stop
+        # producing entity state writes after a couple of cycles, even
+        # though the coordinator and its listener count looked completely
+        # healthy (see custom_components/vidagrid_growatt/webhook.py logging
+        # and the project README for the full writeup). Direct writes here
+        # don't depend on that listener-dispatch path at all, so entities
+        # stay live regardless of whether that turns out to be an upstream
+        # core bug.
+        self.entities_by_sn: dict[str, list[Any]] = {sn: [] for sn in inverter_sns}
+
+    def register_entity(self, sn: str, entity: Any) -> None:
+        """Track an entity so ingest() can write its state directly."""
+        self.entities_by_sn.setdefault(sn, []).append(entity)
 
     async def _async_update_data(self) -> dict[str, Any]:
         any_success = False
@@ -111,4 +128,23 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if diagram_raw is not None:
             self._cache[sn]["diagram"] = parse_diagram_raw(diagram_raw)
         self._ever_succeeded = True
+
+        # Normal path: updates .data, reschedules the fallback poll timer,
+        # and notifies every registered coordinator listener.
         self.async_set_updated_data(self._cache)
+
+        # Belt-and-suspenders path: also write the affected entities'
+        # state directly, bypassing the listener-notification mechanism
+        # entirely. See the comment in __init__ for why.
+        direct_written = 0
+        for entity in self.entities_by_sn.get(sn, []):
+            if getattr(entity, "hass", None) is not None:
+                entity.async_write_ha_state()
+                direct_written += 1
+        _LOGGER.debug(
+            "ingest(%s): notified via coordinator listeners, and directly "
+            "wrote %d/%d registered entities",
+            sn,
+            direct_written,
+            len(self.entities_by_sn.get(sn, [])),
+        )
