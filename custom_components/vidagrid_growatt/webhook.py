@@ -39,6 +39,12 @@ async def _handle_webhook(
         webhook_id
     )
     if coordinator is None:
+        _LOGGER.warning(
+            "Webhook hit for id=%s but no coordinator is registered for it "
+            "(known ids: %s) -- this entry may be stale from a previous load",
+            webhook_id,
+            list(hass.data.get("vidagrid_growatt_webhooks", {}).keys()),
+        )
         return web.Response(status=404, text="unknown webhook")
 
     try:
@@ -48,6 +54,11 @@ async def _handle_webhook(
 
     sn = payload.get("sn")
     if not sn or sn not in coordinator.inverter_sns:
+        _LOGGER.warning(
+            "Webhook hit with sn=%r not in known inverter_sns=%s",
+            sn,
+            coordinator.inverter_sns,
+        )
         return web.Response(status=400, text="missing or unknown 'sn'")
 
     battery_raw = payload.get("battery")
@@ -55,17 +66,43 @@ async def _handle_webhook(
     if battery_raw is None and diagram_raw is None:
         return web.Response(status=400, text="need 'battery' and/or 'diagram'")
 
+    _LOGGER.warning(
+        "Webhook ingest starting: sn=%s coordinator_id=%s listeners=%d "
+        "has_battery=%s has_diagram=%s",
+        sn,
+        id(coordinator),
+        len(coordinator._listeners) if hasattr(coordinator, "_listeners") else -1,
+        battery_raw is not None,
+        diagram_raw is not None,
+    )
+
     try:
         coordinator.ingest(sn, battery_raw=battery_raw, diagram_raw=diagram_raw)
     except Exception:  # noqa: BLE001
         _LOGGER.exception("Failed to ingest webhook payload for %s", sn)
         return web.Response(status=500, text="ingest failed")
 
+    _LOGGER.warning(
+        "Webhook ingest finished: sn=%s coordinator_id=%s new_battery_soc=%s",
+        sn,
+        id(coordinator),
+        (coordinator.data.get(sn, {}).get("diagram") or {}).get("battery_soc_percent")
+        if coordinator.data
+        else None,
+    )
+
     return web.Response(status=200, text="ok")
 
 
 def register(hass: HomeAssistant, webhook_id: str, coordinator: VidaGridCoordinator) -> None:
     """Register this config entry's webhook and track its coordinator."""
+    existing = hass.data.get("vidagrid_growatt_webhooks", {}).get(webhook_id)
+    _LOGGER.warning(
+        "Registering webhook id=%s coordinator_id=%s (replacing existing coordinator_id=%s)",
+        webhook_id,
+        id(coordinator),
+        id(existing) if existing is not None else None,
+    )
     hass.data.setdefault("vidagrid_growatt_webhooks", {})[webhook_id] = coordinator
     webhook.async_register(
         hass,
@@ -78,5 +115,6 @@ def register(hass: HomeAssistant, webhook_id: str, coordinator: VidaGridCoordina
 
 def unregister(hass: HomeAssistant, webhook_id: str) -> None:
     """Unregister a webhook on unload/removal."""
+    _LOGGER.warning("Unregistering webhook id=%s", webhook_id)
     webhook.async_unregister(hass, webhook_id)
     hass.data.get("vidagrid_growatt_webhooks", {}).pop(webhook_id, None)
