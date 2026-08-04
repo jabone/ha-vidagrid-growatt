@@ -28,6 +28,14 @@ RUN apk add --no-cache jq
 # (world-readable, so it works no matter which USER_ID the app runs as).
 COPY extension /defaults/vidagrid-extension-template
 
-COPY rootfs/etc/cont-init.d/98-vidagrid-config.sh /etc/cont-init.d/98-vidagrid-config.sh
+# Runs before any other cont-init.d script (numbered 05, ahead of the
+# base image's own scripts) so the Chromium profile lives on this
+# add-on's persistent /data volume from the very first write, surviving
+# rebuilds/updates instead of just plain restarts.
+COPY rootfs/etc/cont-init.d/05-persist-chromium-profile.sh /etc/cont-init.d/05-persist-chromium-profile.sh
+RUN sed -i 's/\r$//' /etc/cont-init.d/05-persist-chromium-profile.sh \
+ && chmod +x /etc/cont-init.d/05-persist-chromium-profile.sh
+ 
+ COPY rootfs/etc/cont-init.d/98-vidagrid-config.sh /etc/cont-init.d/98-vidagrid-config.sh
 RUN sed -i 's/\r$//' /etc/cont-init.d/98-vidagrid-config.sh \
  && chmod +x /etc/cont-init.d/98-vidagrid-config.sh
