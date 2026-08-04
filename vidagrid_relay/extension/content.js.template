@@ -39,12 +39,24 @@
       return;
     }
     try {
+      // cache: "no-store" plus a cache-busting timestamp param below are both
+      // load-bearing. This browser profile is deliberately persisted across
+      // container restarts (so login survives), which means Chromium's on-disk
+      // HTTP cache persists right along with it. A plain fetch() on a GET
+      // endpoint like these can be served straight from that disk cache with
+      // zero network round-trip -- resp.ok is still true and the "pushed ok"
+      // log still fires, but the body is whatever was cached the first time,
+      // forever. That is what was causing sensor values to freeze for hours
+      // even though pushes kept "succeeding".
+      const ts = Date.now();
       const [batteryRes, diagramRes] = await Promise.all([
-        fetch(`/web/v1/inverter/${sn}/battery`, {
+        fetch("/web/v1/inverter/" + sn + "/battery?_ts=" + ts, {
           headers: { Authorization: auth, Accept: "application/json" },
+          cache: "no-store",
         }),
-        fetch(`/web/v1/inverter/${sn}/diagram`, {
+        fetch("/web/v1/inverter/" + sn + "/diagram?_ts=" + ts, {
           headers: { Authorization: auth, Accept: "application/json" },
+          cache: "no-store",
         }),
       ]);
       const battery = await batteryRes.json();
@@ -54,11 +66,12 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sn, battery, diagram }),
+        cache: "no-store",
       });
       console.log(
         "[VidaGrid relay] pushed",
         sn,
-        resp.ok ? "ok" : `HTTP ${resp.status}`
+        resp.ok ? "ok" : ("HTTP " + resp.status)
       );
     } catch (err) {
       console.warn("[VidaGrid relay] failed for", sn, err);
