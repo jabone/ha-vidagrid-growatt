@@ -177,6 +177,7 @@ class VidaGridSensor(CoordinatorEntity[VidaGridCoordinator], SensorEntity):
             "manufacturer": "Growatt",
             "model": "VidaGrid-managed inverter/battery",
         }
+        coordinator.register_entity(sn, self)
 
     @property
     def native_value(self) -> Any:
@@ -216,6 +217,7 @@ class VidaGridRawDataSensor(CoordinatorEntity[VidaGridCoordinator], SensorEntity
             "manufacturer": "Growatt",
             "model": "VidaGrid-managed inverter/battery",
         }
+        coordinator.register_entity(sn, self)
 
     @property
     def native_value(self) -> Any:
