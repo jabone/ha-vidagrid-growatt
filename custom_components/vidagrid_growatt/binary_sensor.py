@@ -54,6 +54,7 @@ class VidaGridGridStatusSensor(CoordinatorEntity[VidaGridCoordinator], BinarySen
             "manufacturer": "Growatt",
             "model": "VidaGrid-managed inverter/battery",
         }
+        coordinator.register_entity(sn, self)
 
     @property
     def is_on(self) -> bool | None:
