@@ -57,7 +57,8 @@ second, primary data path:
    - **Site ID**: the number in the portal's URL, e.g. `1224587` from
      `.../site_detail/1224587/devices/inverter`. To find it: click **Sites**
      in the portal's left nav, then click into your site.
-   - **Inverter Serial Number(s)**: comma-separated, e.g. `SN00000001,SN00000002`
+   - **Inverter Serial Number(s)**: comma-separated, exactly as shown on
+     your VidaGrid portal's device list (e.g. `SN00000001,SN00000002`)
 
 ### 2. Get your webhook URL
 
