@@ -43,7 +43,8 @@ single `SYS_ADMIN` capability.
    - **Webhook URL** — the full webhook URL shown in the VidaGrid Growatt
      integration's persistent notification in Home Assistant (looks like
      `http://<your-ha-address>:8123/api/webhook/<id>`).
-   - **Inverter serial numbers** — one entry per inverter (e.g.
+   - **Inverter serial numbers** — one entry per inverter, exactly as
+     shown on your VidaGrid portal's device list (e.g.
      `SN00000001`, `SN00000002`).
    Save.
 4. Start the add-on.
