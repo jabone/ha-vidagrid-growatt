@@ -34,6 +34,15 @@ elif [ ! -e "${PROFILE_DIR}" ]; then
 ln -s "${PERSIST_DIR}" "${PROFILE_DIR}"
 fi
 
+# The base image's own ownership-fixup script (85-take-config-ownership.sh)
+# walks /config with a recursive chown, but that does not follow a symlink
+# it encounters *during* traversal (only the initial argument is
+# dereferenced) -- so it would chown the /config/chromium symlink itself
+# and never touch the real directory under /data. Do that explicitly here,
+# or Chromium (which runs as USER_ID:GROUP_ID, not root) can't write to
+# its own profile and crash-loops (exit 21) instead of rendering anything.
+chown -R "${USER_ID:-1000}:${GROUP_ID:-1000}" "${PERSIST_DIR}"
+
 echo "[vidagrid-relay-init] Chromium profile persisted at ${PERSIST_DIR} (symlinked from ${PROFILE_DIR})"
 
 # vim:ft=sh:ts=4:sw=4:et:sts=4
