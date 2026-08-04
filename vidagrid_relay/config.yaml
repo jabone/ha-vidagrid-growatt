@@ -1,5 +1,5 @@
 name: "VidaGrid Relay (Chromium)"
-version: "3.0.1"
+version: "3.1.0"
 slug: "vidagrid_relay"
 description: >-
   A full Chromium browser, reachable from Home Assistant's own sidebar (via
