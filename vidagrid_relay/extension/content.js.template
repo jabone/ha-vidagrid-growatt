@@ -11,10 +11,10 @@
 //
 // This file is a TEMPLATE. The __HA_WEBHOOK_URL__ and __INVERTER_SNS_JSON__
 // placeholders below are filled in automatically at container start by
-// /etc/cont-init.d/99-vidagrid-config, which reads the values you enter in
-// this add-on's Home Assistant "Configuration" tab (Supervisor writes them
-// to /data/options.json). The real, filled-in file is written to
-// /config/vidagrid-extension/content.js -- this template is never edited
+// /etc/cont-init.d/98-vidagrid-config.sh, which reads the values you enter
+// in this add-on's Home Assistant "Configuration" tab (Supervisor writes
+// them to /data/options.json). The real, filled-in file is written to
+// /tmp/vidagrid-extension/content.js -- this template is never edited
 // directly.
 
 (function () {
