@@ -4,37 +4,36 @@
 # local storage this add-on depends on) survive not just container
 # restarts but full add-on rebuilds and updates.
 #
-# This base image stores its profile at /config inside the container.
-# That path is only as persistent as the container's own writable layer
-# -- fine across a plain restart, but wiped whenever Supervisor rebuilds
-# the image (e.g. after a config.yaml/version bump). /data, on the other
-# hand, is this add-on's dedicated persistent volume, kept across
-# restarts and updates (though not a full uninstall).
+# This base image runs Chromium with --user-data-dir=/config/chromium
+# (see jlesage/docker-chromium's rootfs/etc/services.d/app/params).
+# /config itself is a Docker VOLUME baked into the base image -- it
+# can't be removed or replaced (attempting to do so fails with
+# "Resource busy"). /config/chromium is a plain subdirectory of that
+# volume, though, so it's safe to swap for a symlink into /data: this
+# add-on's own persistent volume, kept across restarts and updates
+# (though not a full uninstall).
 #
-# This script runs first (numbered ahead of this base image's own
+# Runs first (numbered ahead of this base image's own
 # 85-take-config-ownership.sh) so that script's ownership/permission
-# fixups apply to the real, persistent location once /config becomes a
-# symlink to it.
+# fixups apply to the real, persistent location once /config/chromium
+# becomes a symlink to it.
 
 set -e
 set -u
 
 PERSIST_DIR="/data/chromium-profile"
-CONFIG_DIR="/config"
+PROFILE_DIR="/config/chromium"
 
 mkdir -p "${PERSIST_DIR}"
 
-if [ -d "${CONFIG_DIR}" ] && [ ! -L "${CONFIG_DIR}" ]; then
-    # First run against this persistent volume: seed it with whatever
-        # the image shipped at /config, then replace /config with a symlink.
-            cp -a "${CONFIG_DIR}/." "${PERSIST_DIR}/" 2>/dev/null || true
-                rm -rf "${CONFIG_DIR}"
-                    ln -s "${PERSIST_DIR}" "${CONFIG_DIR}"
-                    elif [ ! -e "${CONFIG_DIR}" ]; then
-                        ln -s "${PERSIST_DIR}" "${CONFIG_DIR}"
-                        fi
+if [ -d "${PROFILE_DIR}" ] && [ ! -L "${PROFILE_DIR}" ]; then
+cp -a "${PROFILE_DIR}/." "${PERSIST_DIR}/" 2>/dev/null || true
+rm -rf "${PROFILE_DIR}"
+ln -s "${PERSIST_DIR}" "${PROFILE_DIR}"
+elif [ ! -e "${PROFILE_DIR}" ]; then
+ln -s "${PERSIST_DIR}" "${PROFILE_DIR}"
+fi
 
-                        echo "[vidagrid-relay-init] Chromium profile persisted at ${PERSIST_DIR} (symlinked from ${CONFIG_DIR})"
+echo "[vidagrid-relay-init] Chromium profile persisted at ${PERSIST_DIR} (symlinked from ${PROFILE_DIR})"
 
-                        # vim:ft=sh:ts=4:sw=4:et:sts=4
-                        
+# vim:ft=sh:ts=4:sw=4:et:sts=4
