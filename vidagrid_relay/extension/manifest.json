@@ -3,7 +3,8 @@
   "name": "VidaGrid HA Relay",
   "version": "1.0.0",
   "description": "Relays VidaGrid battery/inverter telemetry to a Home Assistant webhook. Reads the page's own auth token locally to make the same requests the portal itself already makes; never sends the token anywhere.",
-  "content_scripts": [
+  "host_permissions": ["<all_urls>"],
+    "content_scripts": [
     {
       "matches": ["https://growatt-us.vidagrid.com/*"],
       "js": ["content.js"],
