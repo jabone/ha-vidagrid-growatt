@@ -1,16 +1,15 @@
 name: "VidaGrid Relay (Chromium)"
-version: "2.0.3"
+version: "3.0.0"
 slug: "vidagrid_relay"
-apparmor: false
-full_access: true
 description: >-
-  A full Chromium browser, reachable from a web page (no monitor needed),
-  that stays logged into the VidaGrid/Growatt portal behind Base Power
-  batteries and relays fresh telemetry to the VidaGrid Growatt integration's
-  webhook every few minutes -- so its sensors keep working without a manual
-  token paste every ~20 minutes. Set your webhook URL and inverter serial
-  numbers in this add-on's Configuration tab, then see the integration's
-  README.md for the one-time login step.
+  A full Chromium browser, reachable from Home Assistant's own sidebar (via
+  Ingress) or directly by IP, that stays logged into the VidaGrid/Growatt
+  portal behind Base Power batteries and relays fresh telemetry to the
+  VidaGrid Growatt integration's webhook every few minutes -- so its
+  sensors keep working without a manual token paste every ~20 minutes. Set
+  your webhook URL and inverter serial numbers in this add-on's
+  Configuration tab, then see the integration's README.md for the
+  one-time login step. Built on jlesage/chromium.
 url: "https://github.com/jabone/ha-vidagrid-growatt"
 arch:
   - aarch64
@@ -18,16 +17,27 @@ arch:
 init: false
 startup: application
 boot: auto
+# SYS_ADMIN lets Chromium create the PID/user namespaces its own sandbox
+# needs -- the single, minimal privilege this base image documents needing.
+# No AppArmor or full_access changes required (unlike the linuxserver/chromium
+# base this add-on used before v3.0.0).
+# See https://github.com/jlesage/docker-chromium#enable-usage-of-sandbox
+privileged:
+  - SYS_ADMIN
+ingress: true
+ingress_port: 5800
 ports:
-  3000/tcp: 3000
-  3001/tcp: 3001
+  5800/tcp: 5800
+  5900/tcp: 5900
 ports_description:
-  3000/tcp: "Web-based Chromium screen (HTTP) -- open this once to log in."
-  3001/tcp: "Web-based Chromium screen (HTTPS)"
+  5800/tcp: "Web-based Chromium screen -- open via the sidebar (Ingress) or directly for the one-time login."
+  5900/tcp: "VNC access (optional)"
 environment:
-  PUID: "1000"
-  PGID: "1000"
+  LANG: "en_US.UTF-8"
   TZ: "Etc/UTC"
+  KEEP_APP_RUNNING: "1"
+  CHROMIUM_APP_URL: "https://growatt-us.vidagrid.com/main/overview"
+  CHROMIUM_CUSTOM_ARGS: "--load-extension=/tmp/vidagrid-extension"
 options:
   webhook_url: ""
   inverter_sns: []
