@@ -1,7 +1,9 @@
 name: "VidaGrid Relay (Chromium)"
-version: "2.0.1"
+version: "2.0.2"
 slug: "vidagrid_relay"
 apparmor: false
+privileged:
+  - SYS_ADMIN
 description: >-
   A full Chromium browser, reachable from a web page (no monitor needed),
   that stays logged into the VidaGrid/Growatt portal behind Base Power
