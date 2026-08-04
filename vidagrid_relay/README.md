@@ -76,12 +76,17 @@ the Configuration values every time the container starts.
   starting; if it persists, check the add-on's log for errors. Unlike the
   previous (linuxserver-based) version of this add-on, this one should not
   need any additional privilege beyond `SYS_ADMIN`.
-- **Login doesn't survive a restart:** this base image persists its full
-  profile under `/config` inside the container, which is *not* itself
-  guaranteed persistent across Supervisor add-on rebuilds. If logins keep
-  getting lost, this is the first thing to revisit (adding a proper
-  `/data`-backed persistence step, as done in the Mincka add-on this is
-  based on).
+- **Login doesn't survive a restart:** as of v3.1.2 this should no longer
+  happen -- the Chromium profile (`/config/chromium`) is symlinked to
+  `/data/chromium-profile`, this add-on's own persistent volume, which
+  survives restarts and ordinary updates (though not a full uninstall).
+  Check the log for a `Chromium profile persisted at ...` line to confirm.
+- **Sensors stop updating in Home Assistant even though the extension
+  console shows `pushed ... ok`:** this was tracked down to a Home
+  Assistant core bug (beta builds around 2026.8), not this add-on --
+  see [home-assistant/core#178145](https://github.com/home-assistant/core/issues/178145).
+  It's worked around in the `vidagrid_growatt` integration itself, so a
+  current install of both should be unaffected either way.
 
 ## Resource use
 
