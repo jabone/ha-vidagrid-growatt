@@ -4,8 +4,8 @@
 // shares the page's own live session. It reads whatever bearer token the
 // page currently holds from localStorage (the exact same thing the page's
 // own JS does for every request) and uses it to fetch fresh battery/diagram/
-// power-curve/energy-curve data, then POSTs only that data -- never the
-// token -- to a Home Assistant webhook. As long as this tab/browser stays
+// power-curve/energy-curve data, then POSTs that data -- plus the token
+// itself -- to a Home Assistant webhook. As long as this tab/browser stays
 // open and logged in, the token itself can expire and refresh silently in
 // the background; this script re-reads it fresh on every cycle so it's
 // never left holding a stale copy.
@@ -18,6 +18,16 @@
 // added /flows/curve/energy (the portal's "Energy" tab totals: PV/AC/system
 // production, load consumption, grid import/export, charge/discharge) as a
 // second curve fetch alongside the existing power one.
+// v1.3.0: the relay now also forwards its current bearer token (and an
+// explicit logged_in flag) to the webhook on every push, so the integration
+// can keep its own fallback-poll token fresh automatically and can tell you
+// when this browser session has logged out -- no more manual dev-tools
+// token paste for day-to-day operation. Setup still requires one manual,
+// human login in this add-on's Web UI the first time (and again whenever
+// the portal logs this browser out), because of the CAPTCHA on its login
+// page; check any "stay signed in" option the portal offers to make that
+// as infrequent as possible -- the same tradeoff apps like Nest or Apple
+// Home ask you to accept.
 //
 // This file is a TEMPLATE. The __HA_WEBHOOK_URL__ and __INVERTER_SNS_JSON__
 // placeholders below are filled in automatically at container start by
@@ -40,6 +50,10 @@
     const raw = window.localStorage.getItem("authorization");
     if (!raw) return null;
     return raw.startsWith("Bearer ") ? raw : "Bearer " + raw;
+  }
+
+  function bareToken(auth) {
+    return auth.startsWith("Bearer ") ? auth.slice(7) : auth;
   }
 
   // Both /flows/curve/* endpoints require startTime/endTime covering the
@@ -84,12 +98,21 @@
     }
   }
 
-  async function relayOne(sn) {
-    const auth = getAuthHeader();
-    if (!auth) {
-      console.warn("[VidaGrid relay] no auth token found in localStorage yet");
-      return;
+  async function postToWebhook(body) {
+    try {
+      const resp = await fetch(HA_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return resp.ok;
+    } catch (err) {
+      console.warn("[VidaGrid relay] webhook POST failed", err);
+      return false;
     }
+  }
+
+  async function relayOne(sn, auth) {
     try {
       const range = todayRangeQuery();
       const [battery, diagram, powerCurve, energyCurve] = await Promise.all([
@@ -104,35 +127,39 @@
         return;
       }
 
-      const body = { sn: sn };
+      const body = { sn: sn, token: bareToken(auth), logged_in: true };
       if (battery) body.battery = battery;
       if (diagram) body.diagram = diagram;
       if (powerCurve) body.power_curve = powerCurve;
       if (energyCurve) body.energy_curve = energyCurve;
 
-      const resp = await fetch(HA_WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      console.log(
-        "[VidaGrid relay] pushed",
-        sn,
-        resp.ok ? "ok" : "HTTP " + resp.status
-      );
+      const ok = await postToWebhook(body);
+      console.log("[VidaGrid relay] pushed", sn, ok ? "ok" : "failed");
     } catch (err) {
       console.warn("[VidaGrid relay] failed for", sn, err);
     }
   }
 
-  function relayAll() {
+  async function relayAll() {
     if (!HA_WEBHOOK_URL || HA_WEBHOOK_URL.indexOf("__") === 0) {
       console.warn(
         "[VidaGrid relay] no webhook URL configured yet -- set it in this add-on's Configuration tab in Home Assistant"
       );
       return;
     }
-    INVERTER_SNS.forEach(relayOne);
+
+    const auth = getAuthHeader();
+    if (!auth) {
+      // No token in localStorage at all -- this browser session is logged
+      // out (or hasn't finished its first login yet). Tell Home Assistant
+      // so it can prompt you to open this add-on's Web UI and sign back in,
+      // instead of just going quietly stale.
+      console.warn("[VidaGrid relay] no auth token found -- reporting logged-out status");
+      await postToWebhook({ logged_in: false });
+      return;
+    }
+
+    await Promise.all(INVERTER_SNS.map((sn) => relayOne(sn, auth)));
   }
 
   // Small delay on first run so the page finishes its own initial load/auth.
