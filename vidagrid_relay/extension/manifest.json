@@ -1,6 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VidaGrid HA Relay",
+  "codeowners": ["@jabone"],
   "version": "1.0.0",
   "description": "Relays VidaGrid battery/inverter telemetry to a Home Assistant webhook. Reads the page's own auth token locally to make the same requests the portal itself already makes; never sends the token anywhere.",
   "host_permissions": ["<all_urls>"],
