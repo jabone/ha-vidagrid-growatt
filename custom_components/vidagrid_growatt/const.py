@@ -38,9 +38,12 @@ DEFAULT_BASE_URL = "https://growatt-us.vidagrid.com"
 # (see webhook.py) is the primary, frequent data path.
 DEFAULT_SCAN_INTERVAL_SECONDS = 1200
 
-# Endpoints observed via browser network inspection on 2026-08-02.
-# These are undocumented/unofficial and may change without notice.
+# Endpoints observed via browser network inspection on 2026-08-02, with the
+# two /flows/curve/* endpoints' required query params (startTime, endTime,
+# type) confirmed via a follow-up live capture on 2026-08-04. These are
+# undocumented/unofficial and may change without notice.
 EP_INVERTER_BATTERY = "/web/v1/inverter/{sn}/battery"
 EP_INVERTER_DIAGRAM = "/web/v1/inverter/{sn}/diagram"
 EP_INVERTER_PRODUCTION = "/web/v1/inverters/production"
 EP_INVERTER_POWER_CURVE = "/web/v1/inverter/{sn}/flows/curve/power"
+EP_INVERTER_ENERGY_CURVE = "/web/v1/inverter/{sn}/flows/curve/energy"
