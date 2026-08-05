@@ -2,19 +2,20 @@
 
 Two data paths feed this coordinator:
 
-1. A slow fallback poll (_async_update_data, every
+1. A slow fallback poll (`_async_update_data`, every
    DEFAULT_SCAN_INTERVAL_SECONDS) using the pasted bearer token. Given the
    token has been observed expiring in as little as ~15-25 minutes, this
    path is expected to fail routinely and is treated as best-effort: a
    failed fetch just keeps the last-known-good value per inverter/section
    rather than erroring the whole entity set to unavailable or forcing a
-   re-auth prompt every time. This is also the only path that fetches the
-   "power curve" (Energy tab) data -- the webhook push (below) only ever
-   sends battery/diagram, so those fields only refresh when this fallback
-   poll manages to run with a currently-valid token.
-2. A webhook push (ingest(), called from webhook.py) fed by a userscript
+   re-auth prompt every time.
+2. A webhook push (`ingest()`, called from webhook.py) fed by a userscript
    running in the user's own already-authenticated browser tab. This is
-   the primary, frequent, sustainable path -- see README.md.
+   the primary, frequent, sustainable path for battery, diagram, AND
+   power_curve data -- see README.md and vidagrid_relay/README.md. As of
+   the userscript's v1.1.0, this is the only path power_curve needs; the
+   fallback poll's own power_curve fetch (below) is now just a secondary
+   safety net rather than power_curve's sole source.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from .api import (
     VidaGridAuthError,
     parse_battery_raw,
     parse_diagram_raw,
+    parse_power_curve_raw,
 )
 from .const import DEFAULT_SCAN_INTERVAL_SECONDS
 
@@ -39,7 +41,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Hold battery + diagram data for every configured inverter.
+    """Hold battery + diagram + power_curve data for every configured inverter.
 
     Populated by a best-effort fallback poll and/or webhook pushes; never
     raises out of _async_update_data after the very first successful
@@ -130,6 +132,7 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         sn: str,
         battery_raw: dict[str, Any] | None = None,
         diagram_raw: dict[str, Any] | None = None,
+        power_curve_raw: dict[str, Any] | None = None,
     ) -> None:
         """Merge a webhook-pushed raw payload into the cache and notify entities."""
         self._cache.setdefault(sn, {"battery": None, "diagram": None, "power_curve": None})
@@ -137,6 +140,8 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._cache[sn]["battery"] = parse_battery_raw(battery_raw)
         if diagram_raw is not None:
             self._cache[sn]["diagram"] = parse_diagram_raw(diagram_raw)
+        if power_curve_raw is not None:
+            self._cache[sn]["power_curve"] = parse_power_curve_raw(power_curve_raw)
         self._ever_succeeded = True
 
         # Normal path: updates .data, reschedules the fallback poll timer,
