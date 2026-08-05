@@ -179,7 +179,7 @@ def _infer_diagram_unit(key: str) -> str:
     if "current" in k:
         return "A"
     if "temp" in k:
-        return "Â°C"
+        return "°C"
     return ""
 
 
