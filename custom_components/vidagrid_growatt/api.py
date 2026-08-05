@@ -5,10 +5,10 @@ live 2-inverter, no-solar Base Power account (see the "Raw Data" diagnostic
 sensors this integration exposes, which is how the shapes below were
 confirmed). Two distinct shapes are in play:
 
-- /diagram: a flat dict of camelCase telemetry keys directly under
-  data (e.g. data["loadPower"]).
-- /battery: data is a list of labeled *sections*
-  ({"title": ..., "children": [{"name": ..., "value": ...}, ...]}),
+- `/diagram`: a flat dict of camelCase telemetry keys directly under
+  `data` (e.g. `data["loadPower"]`).
+- `/battery`: `data` is a list of labeled *sections*
+  (`{"title": ..., "children": [{"name": ..., "value": ...}, ...]}`),
   matching the collapsible panels shown in the portal's own "Battery" tab.
   Values are looked up by their exact on-screen label (e.g. "Discharge
   Power") inside the "Summary Information" section, not by a JSON key.
@@ -17,8 +17,8 @@ confirmed). Two distinct shapes are in play:
   and "BDC1", APX's "APX BM1".."APX BM5" -- one per physical battery
   pack) that each hold the actual leaf metrics.
 
-Both endpoints wrap their real payload in {"code": 0, "msg": "SUCCESS",
-"data": ...}, so this account's data always lives one level down from the
+Both endpoints wrap their real payload in `{"code": 0, "msg": "SUCCESS",
+"data": ...}`, so this account's data always lives one level down from the
 plain fetch.
 
 Beyond the handful of named fields kept for backward compatibility with
@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from typing import Any
 
 import aiohttp
@@ -42,6 +43,7 @@ from .const import (
     EP_INVERTER_BATTERY,
     EP_INVERTER_DIAGRAM,
     EP_INVERTER_PRODUCTION,
+    EP_INVERTER_ENERGY_CURVE,
     EP_INVERTER_POWER_CURVE,
 )
 
@@ -57,7 +59,7 @@ class VidaGridApiError(Exception):
 
 
 def _payload(raw: Any) -> Any:
-    """Unwrap the {"code": 0, "msg": "SUCCESS", "data": ...} envelope."""
+    """Unwrap the `{"code": 0, "msg": "SUCCESS", "data": ...}` envelope."""
     if isinstance(raw, dict) and "data" in raw:
         return raw["data"]
     return raw
@@ -74,7 +76,7 @@ def _find_section(sections: Any, title: str) -> dict[str, Any] | None:
 
 
 def _children_by_name(section: dict[str, Any] | None) -> dict[str, Any]:
-    """Flatten a section's children list into a {label: value} dict."""
+    """Flatten a section's `children` list into a {label: value} dict."""
     result: dict[str, Any] = {}
     if not section:
         return result
@@ -177,12 +179,12 @@ def _infer_diagram_unit(key: str) -> str:
     if "current" in k:
         return "A"
     if "temp" in k:
-        return "°C"
+        return "Â°C"
     return ""
 
 
 def parse_battery_raw(raw: dict[str, Any]) -> dict[str, Any]:
-    """Normalize a raw /battery endpoint response into known fields.
+    """Normalize a raw `/battery` endpoint response into known fields.
 
     Pure function (no I/O) so it can be shared by both the polling HTTP
     client below and the webhook handler in webhook.py, which receives the
@@ -210,7 +212,7 @@ def parse_battery_raw(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def parse_diagram_raw(raw: dict[str, Any]) -> dict[str, Any]:
-    """Normalize a raw /diagram endpoint response into known fields.
+    """Normalize a raw `/diagram` endpoint response into known fields.
 
     Pure function -- see parse_battery_raw() docstring.
     """
@@ -248,7 +250,7 @@ def parse_diagram_raw(raw: dict[str, Any]) -> dict[str, Any]:
         # The portal itself shows "On-Grid"/"Off-Grid" based on this flag.
         "grid_status": data.get("minGridConnection"),
         "equipment_model": data.get("equipmentModel"),
-        # NOTE: is_online in this payload was 0 even while every other
+        # NOTE: `is_online` in this payload was 0 even while every other
         # field reflected live, current telemetry -- matches the
         # cosmetic "Offline" bug seen in the portal's own Devices list.
         # Deliberately not used for anything; kept in raw for reference.
@@ -257,27 +259,74 @@ def parse_diagram_raw(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def parse_power_curve_raw(raw: dict[str, Any]) -> dict[str, Any]:
-    """Normalize a raw /flows/curve/power (portal's "Energy" tab) response.
+def _today_range_params(now: datetime) -> dict[str, str]:
+    """Build the startTime/endTime/type query params both curve endpoints require.
 
-    Field shape not yet confirmed from a live captured response -- this
-    just exposes whatever the endpoint returns via the "fields"/"raw" dict
-    so a raw diagnostic sensor can show the real shape, the same way
-    parse_battery_raw/parse_diagram_raw were originally refined. Today's
-    energy totals were confirmed to exist on this tab via a portal
-    screenshot (PV Energy Production, Energy Production (AC), System
-    Energy Production, Load Consumption (From System), Energy From/To
-    Grid, Discharged, Charged, SOC) but the exact JSON key names this
-    endpoint uses are still unverified.
+    Confirmed via live browser network capture on 2026-08-04: the portal's own
+    "Energy&Power" tab calls both endpoints with startTime/endTime set to the
+    start/end of the selected day (ISO 8601, with the browser's own UTC
+    offset -- e.g. "2026-08-04T00:00:00-05:00") plus type=5m for 5-minute
+    granularity. Without these params both endpoints return HTTP 200 with an
+    empty/null "data" -- that empty response is what this integration got the
+    first time it wired these endpoints in, before the params were known.
+    """
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = now.replace(hour=23, minute=59, second=59, microsecond=0)
+    return {"startTime": start.isoformat(), "endTime": end.isoformat(), "type": "5m"}
+
+
+def _flatten_flat_numeric_dict(
+    data: dict[str, Any], skip_keys: set[str] | None = None
+) -> dict[str, dict[str, Any]]:
+    """Flatten a flat dict of numeric telemetry into the common {key: {label, unit, value}} shape.
+
+    Shared by parse_diagram_raw and the two curve parsers below -- all three
+    endpoints return a flat dict of camelCase/snake_case numeric fields with
+    no unit metadata, so unit is guessed the same way in all three cases.
+    """
+    skip_keys = skip_keys or set()
+    fields: dict[str, dict[str, Any]] = {}
+    for k, v in data.items():
+        if k in skip_keys:
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        fields[_sanitize_key(k)] = {
+            "label": k,
+            "unit": _infer_diagram_unit(k),
+            "value": v,
+        }
+    return fields
+
+
+def _parse_curve_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """Shared parser for both `/flows/curve/power` and `/flows/curve/energy`.
+
+    Confirmed via live capture: `data` is a list of timestamped snapshots
+    (one per interval across the requested day, e.g. every 5 minutes per
+    `type=5m`), each a flat dict of numeric fields -- `/power` holds
+    instantaneous readings (ppv, pacToUserTotal, discharge_power, ...),
+    `/energy` holds day-running cumulative totals (epvToday, eacToday,
+    elocalLoadToday, echargeToday, edischargeToday, socBdc1, ...). Only the
+    most recent (last) snapshot is surfaced as sensor fields -- exposing the
+    full list as ~300 individual entities per inverter isn't useful, and the
+    latest point is what a dashboard actually wants. The full list is still
+    kept under "raw" for reference/future use (e.g. a proper history graph).
     """
     data = _payload(raw)
-    fields: dict[str, dict[str, Any]] = {}
-    if isinstance(data, dict):
-        for k, v in data.items():
-            if isinstance(v, bool) or not isinstance(v, (int, float, str)):
-                continue
-            fields[_sanitize_key(k)] = {"label": k, "unit": "", "value": v}
-    return {"fields": fields, "raw": raw}
+    latest = data[-1] if isinstance(data, list) and data else None
+    fields = _flatten_flat_numeric_dict(latest) if isinstance(latest, dict) else {}
+    return {"fields": fields, "latest": latest, "raw": raw}
+
+
+def parse_power_curve_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a raw `/flows/curve/power` response (instantaneous power history)."""
+    return _parse_curve_raw(raw)
+
+
+def parse_energy_curve_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a raw `/flows/curve/energy` response (portal's "Energy" tab totals)."""
+    return _parse_curve_raw(raw)
 
 
 class VidaGridApiClient:
@@ -297,14 +346,16 @@ class VidaGridApiClient:
         """Update the stored bearer token (e.g. after re-auth)."""
         self._token = bearer_token
 
-    async def _get(self, path: str) -> dict[str, Any]:
+    async def _get(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         url = f"{self._base_url}{path}"
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {self._token}",
         }
         try:
-            async with self._session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+            async with self._session.get(
+                url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=20)
+            ) as resp:
                 if resp.status in (401, 403):
                     raise VidaGridAuthError(f"Auth rejected ({resp.status}) for {path}")
                 if resp.status != 200:
@@ -340,8 +391,25 @@ class VidaGridApiClient:
         _LOGGER.debug("VidaGrid production raw response: %s", raw)
         return {"raw": raw}
 
-    async def async_get_power_curve(self, sn: str) -> dict[str, Any]:
-        """Fetch the historical power/energy curve for one inverter (today, by default)."""
-        raw = await self._get(EP_INVERTER_POWER_CURVE.format(sn=sn))
+    async def async_get_power_curve(self, sn: str, now: datetime) -> dict[str, Any]:
+        """Fetch today's instantaneous-power history for one inverter.
+
+        `now` should be a tz-aware datetime in the account's local timezone
+        (e.g. Home Assistant's own `dt_util.now()`) -- the endpoint requires
+        startTime/endTime with an explicit UTC offset, confirmed via live
+        browser network capture (see _today_range_params()).
+        """
+        params = _today_range_params(now)
+        raw = await self._get(EP_INVERTER_POWER_CURVE.format(sn=sn), params=params)
         _LOGGER.debug("VidaGrid power curve raw response for %s: %s", sn, raw)
         return parse_power_curve_raw(raw)
+
+    async def async_get_energy_curve(self, sn: str, now: datetime) -> dict[str, Any]:
+        """Fetch today's cumulative energy totals for one inverter (the portal's "Energy" tab).
+
+        See async_get_power_curve() docstring re: the `now` param.
+        """
+        params = _today_range_params(now)
+        raw = await self._get(EP_INVERTER_ENERGY_CURVE.format(sn=sn), params=params)
+        _LOGGER.debug("VidaGrid energy curve raw response for %s: %s", sn, raw)
+        return parse_energy_curve_raw(raw)
