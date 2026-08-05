@@ -3,14 +3,16 @@
 Receives telemetry pushed by the browser-side userscript (see README.md)
 running in the user's own already-authenticated VidaGrid browser tab. The
 userscript reads whatever bearer token the page currently holds *locally*
-to fetch fresh `/battery` and `/diagram` JSON, then POSTs only that data
-here -- the token itself never leaves the user's browser.
+to fetch fresh `/battery`, `/diagram`, and `/flows/curve/power` JSON, then
+POSTs only that data here -- the token itself never leaves the user's
+browser.
 
 Expected POST body (JSON):
     {
-        "sn": "SN00000001",
-        "battery": { ...raw /battery response... },   # optional
-        "diagram": { ...raw /diagram response... }     # optional
+        "sn": "SMN7T5N0WN",
+        "battery": { ...raw /battery response... },       # optional
+        "diagram": { ...raw /diagram response... },       # optional
+        "power_curve": { ...raw /flows/curve/power response... }  # optional
     }
 
 The webhook_id is generated once per config entry (see __init__.py) and is
@@ -63,21 +65,28 @@ async def _handle_webhook(
 
     battery_raw = payload.get("battery")
     diagram_raw = payload.get("diagram")
-    if battery_raw is None and diagram_raw is None:
-        return web.Response(status=400, text="need 'battery' and/or 'diagram'")
+    power_curve_raw = payload.get("power_curve")
+    if battery_raw is None and diagram_raw is None and power_curve_raw is None:
+        return web.Response(status=400, text="need 'battery', 'diagram', and/or 'power_curve'")
 
     _LOGGER.warning(
         "Webhook ingest starting: sn=%s coordinator_id=%s listeners=%d "
-        "has_battery=%s has_diagram=%s",
+        "has_battery=%s has_diagram=%s has_power_curve=%s",
         sn,
         id(coordinator),
         len(coordinator._listeners) if hasattr(coordinator, "_listeners") else -1,
         battery_raw is not None,
         diagram_raw is not None,
+        power_curve_raw is not None,
     )
 
     try:
-        coordinator.ingest(sn, battery_raw=battery_raw, diagram_raw=diagram_raw)
+        coordinator.ingest(
+            sn,
+            battery_raw=battery_raw,
+            diagram_raw=diagram_raw,
+            power_curve_raw=power_curve_raw,
+        )
     except Exception:  # noqa: BLE001
         _LOGGER.exception("Failed to ingest webhook payload for %s", sn)
         return web.Response(status=500, text="ingest failed")
