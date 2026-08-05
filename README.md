@@ -42,6 +42,27 @@ directly on a slower ~20 minute interval, using a bearer token that's
 either kept fresh automatically by the relay, or pasted in by hand if
 you'd rather not run the relay add-on at all.
 
+## Prerequisites
+
+- **A Growatt/Base Power battery system already commissioned and visible
+in the Growatt Shiner portal.** Shiner (`growatt-us.vidagrid.com`, also
+reachable as the "Residential Shiner Portal" from growatt.com) is
+Growatt's commissioning and monitoring app/portal -- it replaced the
+older ShineTools/ShinePhone flow -- and it's what your installer used to
+bring the system online. You need a working login for it and at least
+one inverter serial number showing data in its device list before this
+integration has anything to read.
+- **A running Home Assistant instance** with network access to that
+Home Assistant instance's webhook endpoint (for the relay push path) and
+outbound HTTPS access to `growatt-us.vidagrid.com` (for the fallback
+poll).
+- **[HACS](https://hacs.xyz/)** installed, to add this repository as a
+custom repository and install the integration.
+- Optional but recommended: a **Raspberry Pi (or similar always-on
+machine) able to run Home Assistant add-ons**, if you plan to run the
+VidaGrid Relay add-on described below -- it runs a real Chromium browser
+continuously and is meaningfully heavier than a typical add-on.
+
 ## Setup
 
 ### 1. Install the integration (HACS)
