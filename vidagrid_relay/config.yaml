@@ -1,5 +1,5 @@
 name: "VidaGrid Relay (Chromium)"
-version: "3.4.0"
+version: "3.4.1"
 slug: "vidagrid_relay"
 description: >-
   A full Chromium browser, reachable from Home Assistant's own sidebar (via
@@ -34,7 +34,6 @@ ports_description:
   5900/tcp: "VNC access (optional)"
 environment:
   LANG: "en_US.UTF-8"
-  TZ: "Etc/UTC"
   KEEP_APP_RUNNING: "1"
   CHROMIUM_APP_URL: "https://growatt-us.vidagrid.com/main/overview"
   CHROMIUM_CUSTOM_ARGS: "--load-extension=/tmp/vidagrid-extension"
