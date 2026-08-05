@@ -20,7 +20,7 @@ RUNTIME_DIR="/tmp/vidagrid-extension"
 OPTIONS_FILE="/data/options.json"
 
 mkdir -p "${RUNTIME_DIR}"
-cp "${TEMPLATE_DIR}/browser-manifest.json" "${RUNTIME_DIR}/manifest.json"
+cp "${TEMPLATE_DIR}/browser-manifest.src.json" "${RUNTIME_DIR}/manifest.json"
 
 if [ -f "${OPTIONS_FILE}" ]; then
     WEBHOOK_URL=$(jq -r '.webhook_url // empty' "${OPTIONS_FILE}")
