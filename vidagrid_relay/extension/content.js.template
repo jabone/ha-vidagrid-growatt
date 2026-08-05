@@ -3,11 +3,19 @@
 // Runs inside the VidaGrid portal page itself (as a content script), so it
 // shares the page's own live session. It reads whatever bearer token the
 // page currently holds from localStorage (the exact same thing the page's
-// own JS does for every request) and uses it to fetch fresh battery/diagram
-// data, then POSTs only that data -- never the token -- to a Home Assistant
-// webhook. As long as this tab/browser stays open and logged in, the token
-// itself can expire and refresh silently in the background; this script
-// re-reads it fresh on every cycle so it's never left holding a stale copy.
+// own JS does for every request) and uses it to fetch fresh battery/diagram/
+// power-curve data, then POSTs only that data -- never the token -- to a
+// Home Assistant webhook. As long as this tab/browser stays open and logged
+// in, the token itself can expire and refresh silently in the background;
+// this script re-reads it fresh on every cycle so it's never left holding a
+// stale copy.
+//
+// v1.1.0: also relays /flows/curve/power (the portal's "Energy" tab data --
+// PV/AC production, grid import/export, charge/discharge totals, SOC). This
+// closes the last gap where a field depended on a manually-pasted, short-
+// lived bearer token via the integration's slow fallback poll instead of
+// this always-fresh browser session -- same fix as battery/diagram already
+// got, just applied to the third endpoint.
 //
 // This file is a TEMPLATE. The __HA_WEBHOOK_URL__ and __INVERTER_SNS_JSON__
 // placeholders below are filled in automatically at container start by
@@ -32,6 +40,22 @@
     return raw.startsWith("Bearer ") ? raw : "Bearer " + raw;
   }
 
+  async function fetchJsonOrNull(path, auth) {
+    try {
+      const res = await fetch(path, {
+        headers: { Authorization: auth, Accept: "application/json" },
+      });
+      if (!res.ok) {
+        console.warn("[VidaGrid relay]", path, "HTTP", res.status);
+        return null;
+      }
+      return await res.json();
+    } catch (err) {
+      console.warn("[VidaGrid relay] fetch failed for", path, err);
+      return null;
+    }
+  }
+
   async function relayOne(sn) {
     const auth = getAuthHeader();
     if (!auth) {
@@ -39,39 +63,31 @@
       return;
     }
     try {
-      // cache: "no-store" plus a cache-busting timestamp param below are both
-      // load-bearing. This browser profile is deliberately persisted across
-      // container restarts (so login survives), which means Chromium's on-disk
-      // HTTP cache persists right along with it. A plain fetch() on a GET
-      // endpoint like these can be served straight from that disk cache with
-      // zero network round-trip -- resp.ok is still true and the "pushed ok"
-      // log still fires, but the body is whatever was cached the first time,
-      // forever. That is what was causing sensor values to freeze for hours
-      // even though pushes kept "succeeding".
-      const ts = Date.now();
-      const [batteryRes, diagramRes] = await Promise.all([
-        fetch("/web/v1/inverter/" + sn + "/battery?_ts=" + ts, {
-          headers: { Authorization: auth, Accept: "application/json" },
-          cache: "no-store",
-        }),
-        fetch("/web/v1/inverter/" + sn + "/diagram?_ts=" + ts, {
-          headers: { Authorization: auth, Accept: "application/json" },
-          cache: "no-store",
-        }),
+      const [battery, diagram, powerCurve] = await Promise.all([
+        fetchJsonOrNull("/web/v1/inverter/" + sn + "/battery", auth),
+        fetchJsonOrNull("/web/v1/inverter/" + sn + "/diagram", auth),
+        fetchJsonOrNull("/web/v1/inverter/" + sn + "/flows/curve/power", auth),
       ]);
-      const battery = await batteryRes.json();
-      const diagram = await diagramRes.json();
+
+      if (!battery && !diagram && !powerCurve) {
+        console.warn("[VidaGrid relay] all fetches failed for", sn, "-- skipping push");
+        return;
+      }
+
+      const body = { sn: sn };
+      if (battery) body.battery = battery;
+      if (diagram) body.diagram = diagram;
+      if (powerCurve) body.power_curve = powerCurve;
 
       const resp = await fetch(HA_WEBHOOK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sn, battery, diagram }),
-        cache: "no-store",
+        body: JSON.stringify(body),
       });
       console.log(
         "[VidaGrid relay] pushed",
         sn,
-        resp.ok ? "ok" : ("HTTP " + resp.status)
+        resp.ok ? "ok" : "HTTP " + resp.status
       );
     } catch (err) {
       console.warn("[VidaGrid relay] failed for", sn, err);
