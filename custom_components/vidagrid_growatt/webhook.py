@@ -1,19 +1,27 @@
 """Webhook ingest endpoint for the VidaGrid Growatt integration.
 
-Receives telemetry pushed by the browser-side userscript (see README.md)
-running in the user's own already-authenticated VidaGrid browser tab. The
-userscript reads whatever bearer token the page currently holds *locally*
-to fetch fresh `/battery`, `/diagram`, `/flows/curve/power`, and
-`/flows/curve/energy` JSON, then POSTs only that data here -- the token
-itself never leaves the user's browser.
+Receives telemetry pushed by the browser-side relay extension (see
+vidagrid_relay/ and README.md) running in the user's own already-
+authenticated VidaGrid browser tab. The extension reads whatever bearer
+token the page currently holds *locally* to fetch fresh `/battery`,
+`/diagram`, `/flows/curve/power`, and `/flows/curve/energy` JSON, then
+POSTs that data here -- plus, as of v1.3.0, the token itself, so this
+integration can keep its own fallback-poll client current and can tell you
+when the relay's browser session has logged out. No token, config-flow
+paste, or dev-tools step is required for day-to-day operation: the token
+only ever needs to be entered manually once, in the relay add-on's own Web
+UI, when you sign into the portal there (same idea as periodically
+re-authenticating a Nest or Apple Home integration).
 
-Expected POST body (JSON):
+Expected POST body (JSON), all fields optional except as noted:
     {
-        "sn": "SMN7T5N0WN",
-        "battery": { ...raw /battery response... },                     # optional
-        "diagram": { ...raw /diagram response... },                     # optional
-        "power_curve": { ...raw /flows/curve/power response... },       # optional
-        "energy_curve": { ...raw /flows/curve/energy response... }      # optional
+        "sn": "SMN7T5N0WN",              # required for data ingest, omitted for a pure status ping
+        "battery": { ... },              # raw /battery response
+        "diagram": { ... },              # raw /diagram response
+        "power_curve": { ... },          # raw /flows/curve/power response
+        "energy_curve": { ... },         # raw /flows/curve/energy response
+        "token": "...",                  # current bearer token, used to refresh the fallback poller
+        "logged_in": true                # explicit relay session status
     }
 
 The webhook_id is generated once per config entry (see __init__.py) and is
@@ -55,7 +63,34 @@ async def _handle_webhook(
     except ValueError:
         return web.Response(status=400, text="invalid json")
 
+    # Session-status fields. Deliberately not logged (not even at debug) so
+    # the bearer token never ends up written to the HA log.
+    token = payload.get("token")
+    if isinstance(token, str) and token:
+        coordinator.api.set_token(token)
+
+    if "logged_in" in payload:
+        coordinator.set_relay_logged_in(bool(payload["logged_in"]))
+    elif token:
+        # Older/simpler relay payloads that carry a token without an
+        # explicit flag still clearly imply a logged-in session.
+        coordinator.set_relay_logged_in(True)
+
     sn = payload.get("sn")
+    battery_raw = payload.get("battery")
+    diagram_raw = payload.get("diagram")
+    power_curve_raw = payload.get("power_curve")
+    energy_curve_raw = payload.get("energy_curve")
+
+    has_data = any(
+        x is not None
+        for x in (battery_raw, diagram_raw, power_curve_raw, energy_curve_raw)
+    )
+    if not has_data:
+        # Pure session-status ping (e.g. a logged-out notice, or a token
+        # refresh with nothing new to report yet) -- nothing left to ingest.
+        return web.Response(status=200, text="ok")
+
     if not sn or sn not in coordinator.inverter_sns:
         _LOGGER.warning(
             "Webhook hit with sn=%r not in known inverter_sns=%s",
@@ -63,21 +98,6 @@ async def _handle_webhook(
             coordinator.inverter_sns,
         )
         return web.Response(status=400, text="missing or unknown 'sn'")
-
-    battery_raw = payload.get("battery")
-    diagram_raw = payload.get("diagram")
-    power_curve_raw = payload.get("power_curve")
-    energy_curve_raw = payload.get("energy_curve")
-    if (
-        battery_raw is None
-        and diagram_raw is None
-        and power_curve_raw is None
-        and energy_curve_raw is None
-    ):
-        return web.Response(
-            status=400,
-            text="need 'battery', 'diagram', 'power_curve', and/or 'energy_curve'",
-        )
 
     _LOGGER.warning(
         "Webhook ingest starting: sn=%s coordinator_id=%s listeners=%d "
