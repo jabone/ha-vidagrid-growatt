@@ -3,17 +3,20 @@
 Home Assistant integration, plus an optional companion add-on, for
 Growatt-branded batteries sold behind Base Power's white-label VidaGrid
 portal (`growatt-us.vidagrid.com`). This is a second, independent data
-source alongside the official Base Power integration -- battery state of
-charge, live power flow (solar/grid/load/battery), and today's power and
-energy curves, all surfaced as native Home Assistant sensors.
+source alongside [jerrit's Base Power integration](https://github.com/jerrit/ha-base-power)
+(also unofficial and community-maintained, not affiliated with Base
+Power) -- battery state of charge, live power flow
+(solar/grid/load/battery), and today's power and energy curves, all
+surfaced as native Home Assistant sensors.
 
 ## Why this exists
 
-Base Power's own integration doesn't expose everything the VidaGrid portal
-itself tracks per inverter: state of charge, discharge/charge power
-breakdown, BDC/BMS details, and separate power-curve/energy-curve history.
-This integration talks directly to the (undocumented, unofficial) REST API
-behind that portal to fill in the rest.
+[jerrit/ha-base-power](https://github.com/jerrit/ha-base-power) doesn't
+expose everything the VidaGrid portal itself tracks per inverter: state
+of charge, discharge/charge power breakdown, BDC/BMS details, and
+separate power-curve/energy-curve history. This integration talks
+directly to the (undocumented, unofficial) REST API behind that portal
+to fill in the rest.
 
 ## How it works
 
