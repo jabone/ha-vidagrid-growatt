@@ -28,6 +28,15 @@
 // page; check any "stay signed in" option the portal offers to make that
 // as infrequent as possible -- the same tradeoff apps like Nest or Apple
 // Home ask you to accept.
+// v1.4.0: both curve endpoints were consistently returning "data": null
+// when queried for *today*'s date range, even with valid startTime/endTime/
+// type params and a healthy token -- confirmed by comparing against the
+// portal's own Energy&Power tab, which itself defaults to showing
+// *yesterday* when opened, because this account's curve/history rollup
+// simply isn't populated for the current day yet. Each curve fetch now
+// tries today first and, if the response's "data" comes back null/empty,
+// automatically retries once with yesterday's date range instead of
+// silently pushing an empty result.
 //
 // This file is a TEMPLATE. The __HA_WEBHOOK_URL__ and __INVERTER_SNS_JSON__
 // placeholders below are filled in automatically at container start by
@@ -61,10 +70,13 @@
   // "2026-08-04T00:00:00-05:00" -- NOT "Z"), plus type=5m for 5-minute
   // granularity. Built from the browser's own local time/offset so it
   // matches whatever "today" means for this account, same as the portal's
-  // own JS does.
-  function todayRangeQuery() {
+  // own JS does. `daysAgo` shifts the queried calendar day back (0 = today,
+  // 1 = yesterday, ...) -- see the v1.4.0 changelog note above for why that
+  // matters.
+  function dayRangeQuery(daysAgo) {
     const now = new Date();
-    const offsetMin = -now.getTimezoneOffset();
+    now.setDate(now.getDate() - daysAgo);
+    const offsetMin = -new Date().getTimezoneOffset();
     const sign = offsetMin >= 0 ? "+" : "-";
     const abs = Math.abs(offsetMin);
     const oh = String(Math.floor(abs / 60)).padStart(2, "0");
@@ -98,6 +110,24 @@
     }
   }
 
+  // Some accounts' curve/history rollup lags a day behind (today's range
+  // comes back HTTP 200 with "data": null even though the request itself is
+  // well-formed) -- see the v1.4.0 changelog note above. Try today first
+  // since that's what most accounts should have, then fall back to
+  // yesterday once before giving up, rather than pushing a permanently
+  // empty sensor.
+  async function fetchCurveWithFallback(basePath, auth) {
+    for (const daysAgo of [0, 1]) {
+      const json = await fetchJsonOrNull(basePath + "?" + dayRangeQuery(daysAgo), auth);
+      const data = json && json.data;
+      const hasData = Array.isArray(data) ? data.length > 0 : !!data;
+      if (hasData) {
+        return json;
+      }
+    }
+    return null;
+  }
+
   async function postToWebhook(body) {
     try {
       const resp = await fetch(HA_WEBHOOK_URL, {
@@ -114,12 +144,11 @@
 
   async function relayOne(sn, auth) {
     try {
-      const range = todayRangeQuery();
       const [battery, diagram, powerCurve, energyCurve] = await Promise.all([
         fetchJsonOrNull("/web/v1/inverter/" + sn + "/battery", auth),
         fetchJsonOrNull("/web/v1/inverter/" + sn + "/diagram", auth),
-        fetchJsonOrNull("/web/v1/inverter/" + sn + "/flows/curve/power?" + range, auth),
-        fetchJsonOrNull("/web/v1/inverter/" + sn + "/flows/curve/energy?" + range, auth),
+        fetchCurveWithFallback("/web/v1/inverter/" + sn + "/flows/curve/power", auth),
+        fetchCurveWithFallback("/web/v1/inverter/" + sn + "/flows/curve/energy", auth),
       ]);
 
       if (!battery && !diagram && !powerCurve && !energyCurve) {
