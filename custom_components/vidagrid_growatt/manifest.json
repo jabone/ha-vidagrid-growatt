@@ -1,7 +1,9 @@
 {
   "domain": "vidagrid_growatt",
   "name": "VidaGrid (Growatt / Base Power Batteries)",
-  "codeowners": [],
+  "codeowners": [
+    "@jabone"
+  ],
   "config_flow": true,
   "documentation": "https://github.com/jabone/ha-vidagrid-growatt",
   "integration_type": "hub",
