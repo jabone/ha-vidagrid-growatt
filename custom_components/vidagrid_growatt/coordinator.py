@@ -110,6 +110,19 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # which is exactly what caused entities to go permanently silent
         # after the first successful webhook cycle in practice (see
         # home-assistant/core#178145 and the project README).
+        #
+        # v0.5.4: even after confirming (via debug logging) that this dict
+        # is clean -- a single registration per entity, zero duplicates --
+        # calling entity.async_write_ha_state() directly still stopped
+        # taking effect after the first cycle or two, with no exception
+        # raised. That rules out double-registration as the cause and
+        # points at something inside Entity.async_write_ha_state()'s own
+        # dispatch path on this core build. _direct_state_write() below is
+        # a diagnostic/stopgap workaround: it bypasses
+        # async_write_ha_state() entirely and writes straight to the state
+        # machine via hass.states.async_set(), using the entity's own
+        # already-public .state/.extra_state_attributes/etc. properties to
+        # compute the same values async_write_ha_state() would have used.
         self.entities_by_sn: dict[str, dict[Any, Any]] = {sn: {} for sn in inverter_sns}
 
         # Account-level (not per-inverter) relay session status, reported by
@@ -135,6 +148,65 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def register_relay_status_entity(self, entity: Any) -> None:
         """Track an entity (e.g. the relay-session binary sensor) for direct writes."""
         self._relay_status_entities.append(entity)
+
+    def _direct_state_write(self, entity: Any) -> bool:
+        """Bypass Entity.async_write_ha_state() and write straight to the
+        state machine via hass.states.async_set().
+
+        Diagnostic workaround for home-assistant/core#178145. v0.5.3 already
+        confirmed (via debug logging) that entities_by_sn is a clean,
+        deduplicated set -- entity.async_write_ha_state() was being called
+        directly, with no exceptions, on a single registered copy of each
+        entity, and it still stopped updating the actual state machine
+        after the first cycle or two. This method tests (and, if it works,
+        works around) whether the fault lives specifically inside
+        Entity.async_write_ha_state()'s own dispatch path rather than in
+        hass.states.async_set() itself, by calling the lower-level API
+        directly using the entity's own public .state /
+        .extra_state_attributes / .unit_of_measurement / .device_class /
+        .state_class properties -- the same values async_write_ha_state()
+        would itself have used.
+
+        This is a stopgap, not a full reimplementation of
+        async_write_ha_state(): the attribute set covers the common cases
+        but isn't a byte-for-byte match of everything HA's Entity base
+        class can produce (e.g. it does not set the "friendly_name"
+        attribute, relying on the entity registry's own name resolution
+        instead, which is how these entities were already being displayed).
+        """
+        if getattr(entity, "hass", None) is None or getattr(entity, "entity_id", None) is None:
+            return False
+
+        try:
+            state = entity.state
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "Direct state-machine write: entity.state raised for %s",
+                getattr(entity, "entity_id", "?"),
+                exc_info=True,
+            )
+            return False
+
+        attrs: dict[str, Any] = {}
+        extra = getattr(entity, "extra_state_attributes", None)
+        if extra:
+            attrs.update(extra)
+        unit = getattr(entity, "unit_of_measurement", None)
+        if unit:
+            attrs["unit_of_measurement"] = unit
+        device_class = getattr(entity, "device_class", None)
+        if device_class:
+            attrs["device_class"] = device_class
+        state_class = getattr(entity, "state_class", None)
+        if state_class:
+            attrs["state_class"] = state_class
+
+        self.hass.states.async_set(
+            entity.entity_id,
+            "unknown" if state is None else state,
+            attrs,
+        )
+        return True
 
     async def _async_update_data(self) -> dict[str, Any]:
         any_success = False
@@ -210,25 +282,27 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # and notifies every registered coordinator listener.
         self.async_set_updated_data(self._cache)
 
-        # Belt-and-suspenders path: also write the affected entities'
-        # state directly, bypassing the listener-notification mechanism
-        # entirely. See the comment in __init__ for why. Stale entries
-        # (entity.hass is None -- a superseded/torn-down entity object)
-        # are pruned here rather than left to accumulate forever.
+        # Belt-and-suspenders path: bypass the listener-notification
+        # mechanism entirely and write straight to the state machine via
+        # hass.states.async_set() (see _direct_state_write() above and
+        # home-assistant/core#178145). Stale entries (entity.hass is None
+        # -- a superseded/torn-down entity object) are pruned here rather
+        # than left to accumulate forever.
         direct_written = 0
         stale_keys: list[Any] = []
         for key, entity in self.entities_by_sn.get(sn, {}).items():
-            if getattr(entity, "hass", None) is not None:
-                entity.async_write_ha_state()
-                direct_written += 1
-            else:
+            if getattr(entity, "hass", None) is None:
                 stale_keys.append(key)
+                continue
+            if self._direct_state_write(entity):
+                direct_written += 1
         total_before_prune = len(self.entities_by_sn.get(sn, {}))
         for key in stale_keys:
             self.entities_by_sn[sn].pop(key, None)
         _LOGGER.debug(
             "ingest(%s): notified via coordinator listeners, and directly "
-            "wrote %d/%d registered entities (%d stale entries pruned)",
+            "wrote %d/%d registered entities via hass.states.async_set() "
+            "(%d stale entries pruned)",
             sn,
             direct_written,
             total_before_prune,
