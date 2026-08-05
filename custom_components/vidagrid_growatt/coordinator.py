@@ -16,6 +16,13 @@ Two data paths feed this coordinator:
    of the userscript's v1.2.0, this is the only path the two curve
    endpoints need; the fallback poll's own curve fetches (below) are now
    just a secondary safety net rather than their sole source.
+
+As of the relay's v1.3.0, the webhook push also carries the browser's
+current bearer token and an explicit login-status flag (see
+set_relay_logged_in() below), so this coordinator's own fallback-poll
+client stays current automatically and the integration can surface a clear
+"log back in" prompt when the relay's browser session has logged out --
+instead of that path just silently going stale forever.
 """
 
 from __future__ import annotations
@@ -24,6 +31,7 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -47,6 +55,8 @@ _EMPTY_CACHE_ENTRY = {
     "power_curve": None,
     "energy_curve": None,
 }
+
+_RELAY_LOGGED_OUT_NOTIFICATION_ID = "vidagrid_growatt_relay_logged_out"
 
 
 class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -91,9 +101,19 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # core bug.
         self.entities_by_sn: dict[str, list[Any]] = {sn: [] for sn in inverter_sns}
 
+        # Account-level (not per-inverter) relay session status, reported by
+        # the browser relay extension on every webhook push. `logged_in` is
+        # None until the relay has checked in at least once.
+        self.relay_status: dict[str, Any] = {"logged_in": None, "last_changed": None}
+        self._relay_status_entities: list[Any] = []
+
     def register_entity(self, sn: str, entity: Any) -> None:
         """Track an entity so ingest() can write its state directly."""
         self.entities_by_sn.setdefault(sn, []).append(entity)
+
+    def register_relay_status_entity(self, entity: Any) -> None:
+        """Track an entity (e.g. the relay-session binary sensor) for direct writes."""
+        self._relay_status_entities.append(entity)
 
     async def _async_update_data(self) -> dict[str, Any]:
         any_success = False
@@ -184,3 +204,44 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             direct_written,
             len(self.entities_by_sn.get(sn, [])),
         )
+
+    def set_relay_logged_in(self, logged_in: bool) -> None:
+        """Record the relay browser extension's current login status.
+
+        Called from webhook.py on every push that includes a `logged_in`
+        flag or a fresh `token`. Fires (and clears) a persistent notification
+        on a True<->False transition so a logged-out relay surfaces as an
+        actionable prompt -- open the add-on's Web UI and sign back in --
+        rather than data just quietly going stale.
+        """
+        previous = self.relay_status.get("logged_in")
+        self.relay_status["logged_in"] = logged_in
+        self.relay_status["last_changed"] = dt_util.now().isoformat()
+
+        if logged_in is False and previous is not False:
+            persistent_notification.async_create(
+                self.hass,
+                (
+                    "The VidaGrid Relay add-on's browser session has logged "
+                    "out, so fresh battery/solar data has stopped flowing.\n\n"
+                    "Open **Settings > Add-ons > VidaGrid Relay > Open Web "
+                    "UI**, sign back into growatt-us.vidagrid.com (solving "
+                    "the captcha), and check any \"stay signed in\" or "
+                    "\"remember me\" option the portal offers so this "
+                    "happens as rarely as possible -- the same tradeoff "
+                    "apps like Nest or Apple Home ask you to make. Data "
+                    "resumes automatically once you're logged back in; "
+                    "nothing needs to change here in Home Assistant."
+                ),
+                title="VidaGrid Growatt: relay needs you to log back in",
+                notification_id=_RELAY_LOGGED_OUT_NOTIFICATION_ID,
+            )
+        elif logged_in is True and previous is False:
+            persistent_notification.async_dismiss(
+                self.hass, _RELAY_LOGGED_OUT_NOTIFICATION_ID
+            )
+
+        self.async_update_listeners()
+        for entity in self._relay_status_entities:
+            if getattr(entity, "hass", None) is not None:
+                entity.async_write_ha_state()
