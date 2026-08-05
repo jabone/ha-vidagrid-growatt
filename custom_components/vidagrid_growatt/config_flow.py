@@ -1,10 +1,18 @@
 """Config flow for the VidaGrid Growatt integration.
 
 The portal's login page requires solving a CAPTCHA, so this integration
-cannot authenticate on its own. The user signs into the portal normally in
-their browser, copies the Bearer token their browser already holds, and
-pastes it here. See README.md (packaged alongside this integration) for the
-exact dev-tools steps to grab that token.
+cannot log in on its own -- a human has to do that part. But it doesn't
+need a manually-copied bearer token pasted in here to work day-to-day: if
+you're running the VidaGrid Relay add-on, leave the bearer token field
+blank and just log into the portal once in that add-on's own Web UI. The
+relay's browser extension forwards its token to this integration
+automatically on every push, the same way Nest or Apple Home ask you to
+periodically re-authenticate rather than staying logged in forever.
+
+The bearer token field below still exists for people who'd rather not run
+the relay add-on and just want the best-effort fallback poll: paste a
+token copied from your browser's dev tools (Network tab, any /web/v1/
+request's Authorization header) and it'll be validated immediately.
 """
 
 from __future__ import annotations
@@ -37,11 +45,20 @@ def _parse_sns(raw: str) -> list[str]:
 
 
 async def _validate(hass: HomeAssistant, data: dict[str, Any]) -> None:
-    session = async_get_clientsession(hass)
-    api = VidaGridApiClient(session, data[CONF_BASE_URL], data[CONF_BEARER_TOKEN])
     sns = _parse_sns(data[CONF_INVERTER_SNS])
     if not sns:
         raise ValueError("no_inverters")
+
+    token = (data.get(CONF_BEARER_TOKEN) or "").strip()
+    if not token:
+        # No token yet -- trust the VidaGrid Relay add-on to supply one via
+        # webhook shortly after setup. Requiring a live, valid token here
+        # would just reintroduce the manual dev-tools copy/paste step this
+        # optional field exists to avoid.
+        return
+
+    session = async_get_clientsession(hass)
+    api = VidaGridApiClient(session, data[CONF_BASE_URL], token)
     await api.async_validate_token(sns[0])
 
 
@@ -80,7 +97,7 @@ class VidaGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
-                vol.Required(CONF_BEARER_TOKEN): str,
+                vol.Optional(CONF_BEARER_TOKEN, default=""): str,
                 vol.Required(CONF_BASE_URL, default=DEFAULT_BASE_URL): str,
                 vol.Required(CONF_SITE_ID): str,
                 vol.Required(CONF_INVERTER_SNS): str,
@@ -92,9 +109,13 @@ class VidaGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders={
                 "token_help": (
-                    "Sign into growatt-us.vidagrid.com in your browser, open dev "
-                    "tools > Network, reload, click any /web/v1/ request, and "
-                    "copy the value after 'Bearer ' in its Authorization header."
+                    "Leave this blank if you're running the VidaGrid Relay "
+                    "add-on -- just log into growatt-us.vidagrid.com once in "
+                    "its Web UI and the token will be picked up automatically. "
+                    "Otherwise, sign into the portal in your own browser, open "
+                    "dev tools > Network, reload, click any /web/v1/ request, "
+                    "and copy the value after 'Bearer ' in its Authorization "
+                    "header."
                 )
             },
         )
@@ -110,6 +131,12 @@ class VidaGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
+        """Manual token re-entry, for anyone not running the VidaGrid Relay add-on.
+
+        If you are running the relay, you don't need this: just log back
+        into the portal in the add-on's Web UI and its next push refreshes
+        the token here automatically.
+        """
         errors: dict[str, str] = {}
         assert self._reauth_entry is not None
 
