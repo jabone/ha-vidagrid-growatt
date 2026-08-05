@@ -4,6 +4,7 @@
   "codeowners": [],
   "config_flow": true,
   "documentation": "https://github.com/jabone/ha-vidagrid-growatt",
+  "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/jabone/ha-vidagrid-growatt/issues",
   "requirements": [],
