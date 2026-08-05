@@ -5,22 +5,35 @@ live 2-inverter, no-solar Base Power account (see the "Raw Data" diagnostic
 sensors this integration exposes, which is how the shapes below were
 confirmed). Two distinct shapes are in play:
 
-- `/diagram`: a flat dict of camelCase telemetry keys directly under
-  `data` (e.g. `data["loadPower"]`).
-- `/battery`: `data` is a list of labeled *sections*
-  (`{"title": ..., "children": [{"name": ..., "value": ...}, ...]}`),
+- /diagram: a flat dict of camelCase telemetry keys directly under
+  data (e.g. data["loadPower"]).
+- /battery: data is a list of labeled *sections*
+  ({"title": ..., "children": [{"name": ..., "value": ...}, ...]}),
   matching the collapsible panels shown in the portal's own "Battery" tab.
   Values are looked up by their exact on-screen label (e.g. "Discharge
   Power") inside the "Summary Information" section, not by a JSON key.
+  A handful of "multiple"-type sections (BDC, APX) nest one level deeper:
+  their children are themselves named sub-sections (BDC's "Information"
+  and "BDC1", APX's "APX BM1".."APX BM5" -- one per physical battery
+  pack) that each hold the actual leaf metrics.
 
-Both endpoints wrap their real payload in `{"code": 0, "msg": "SUCCESS",
-"data": ...}`, so this account's data always lives one level down from the
+Both endpoints wrap their real payload in {"code": 0, "msg": "SUCCESS",
+"data": ...}, so this account's data always lives one level down from the
 plain fetch.
+
+Beyond the handful of named fields kept for backward compatibility with
+the original sensor set, both parsers also return a "fields" dict holding
+*every* leaf metric they found (keyed by a sanitized snake_case name, with
+the original on-screen label and unit preserved) so sensor.py can surface
+the full breadth of what the portal shows -- individual battery-pack
+diagnostics (APX BM1..BM5), BDC-level detail, etc. -- without this file
+needing an explicit line of code per field.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import aiohttp
@@ -44,7 +57,7 @@ class VidaGridApiError(Exception):
 
 
 def _payload(raw: Any) -> Any:
-    """Unwrap the `{"code": 0, "msg": "SUCCESS", "data": ...}` envelope."""
+    """Unwrap the {"code": 0, "msg": "SUCCESS", "data": ...} envelope."""
     if isinstance(raw, dict) and "data" in raw:
         return raw["data"]
     return raw
@@ -61,7 +74,7 @@ def _find_section(sections: Any, title: str) -> dict[str, Any] | None:
 
 
 def _children_by_name(section: dict[str, Any] | None) -> dict[str, Any]:
-    """Flatten a section's `children` list into a {label: value} dict."""
+    """Flatten a section's children list into a {label: value} dict."""
     result: dict[str, Any] = {}
     if not section:
         return result
@@ -72,8 +85,104 @@ def _children_by_name(section: dict[str, Any] | None) -> dict[str, Any]:
     return result
 
 
+def _sanitize_key(label: str) -> str:
+    """Turn a human label like 'AC To Load' or 'APX BM1  SOC' into a snake_case key."""
+    s = label.strip().lower()
+    s = re.sub(r"[^\w]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s or "field"
+
+
+# Labels already surfaced by the small set of hand-picked, well-typed sensors
+# below (Discharge Power, Load Power, etc.) -- skipped when flattening so the
+# comprehensive "fields" dict doesn't duplicate them under a second entity.
+_STATICALLY_COVERED_BATTERY_LABELS = {
+    "Discharge Power",
+    "Charge Power",
+    "BDC1 SN",
+    "BDC2 SN",
+    "Connect Status",
+    "Bus Ref",
+    "BMS Type",
+    "AC To Load",
+    "BDC Link Num",
+    "Pack Num",
+}
+_STATICALLY_COVERED_DIAGRAM_KEYS = {"loadPower", "pvPower"}
+
+
+def _flatten_battery_sections(sections: Any) -> dict[str, dict[str, Any]]:
+    """Flatten every leaf metric in the /battery endpoint's section tree.
+
+    Returns {sanitized_key: {"label": display label, "unit": str, "value": Any}}.
+    Leaf names inside nested sub-sections (BDC1, APX BM1..BM5) are often
+    generic/un-prefixed on their own (e.g. " SOC", " Voltage"), so they're
+    prefixed with their sub-section's own title to keep e.g. "APX BM1 SOC"
+    and "APX BM2 SOC" distinct entities instead of colliding.
+    """
+    result: dict[str, dict[str, Any]] = {}
+    if not isinstance(sections, list):
+        return result
+
+    def _add_leaf(label: str, leaf: dict[str, Any]) -> None:
+        label = label.strip()
+        if not label or label in _STATICALLY_COVERED_BATTERY_LABELS:
+            return
+        key = _sanitize_key(label)
+        base_key, suffix = key, 2
+        while key in result and result[key]["label"] != label:
+            key = f"{base_key}_{suffix}"
+            suffix += 1
+        result[key] = {
+            "label": label,
+            "unit": (leaf.get("unit") or "").strip(),
+            "value": leaf.get("value"),
+        }
+
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        for child in section.get("children") or []:
+            if not isinstance(child, dict):
+                continue
+            if "children" in child:
+                # Nested sub-section: BDC's "Information"/"BDC1", APX's "APX BM1".."BM5".
+                sub_title = (child.get("title") or "").strip()
+                for leaf in child.get("children") or []:
+                    if not isinstance(leaf, dict) or "value" not in leaf:
+                        continue
+                    name = (leaf.get("name") or "").strip()
+                    if not name:
+                        continue
+                    label = f"{sub_title} {name}".strip() if sub_title else name
+                    _add_leaf(label, leaf)
+            elif "value" in child:
+                name = (child.get("name") or "").strip()
+                if name:
+                    _add_leaf(name, child)
+    return result
+
+
+def _infer_diagram_unit(key: str) -> str:
+    """Best-effort unit guess for /diagram fields, which carry no unit metadata."""
+    k = key.lower()
+    if "power" in k:
+        return "W"
+    if "energy" in k or k.endswith("kwh"):
+        return "kWh"
+    if "soc" in k or "percent" in k:
+        return "%"
+    if "voltage" in k or k.endswith("volt"):
+        return "V"
+    if "current" in k:
+        return "A"
+    if "temp" in k:
+        return "°C"
+    return ""
+
+
 def parse_battery_raw(raw: dict[str, Any]) -> dict[str, Any]:
-    """Normalize a raw `/battery` endpoint response into known fields.
+    """Normalize a raw /battery endpoint response into known fields.
 
     Pure function (no I/O) so it can be shared by both the polling HTTP
     client below and the webhook handler in webhook.py, which receives the
@@ -82,6 +191,7 @@ def parse_battery_raw(raw: dict[str, Any]) -> dict[str, Any]:
     """
     sections = _payload(raw)
     summary = _children_by_name(_find_section(sections, "Summary Information"))
+    fields = _flatten_battery_sections(sections)
 
     return {
         "discharge_power_w": summary.get("Discharge Power"),
@@ -94,12 +204,13 @@ def parse_battery_raw(raw: dict[str, Any]) -> dict[str, Any]:
         "ac_to_load_w": summary.get("AC To Load"),
         "bdc_link_num": summary.get("BDC Link Num"),
         "pack_num": summary.get("Pack Num"),
+        "fields": fields,
         "raw": raw,
     }
 
 
 def parse_diagram_raw(raw: dict[str, Any]) -> dict[str, Any]:
-    """Normalize a raw `/diagram` endpoint response into known fields.
+    """Normalize a raw /diagram endpoint response into known fields.
 
     Pure function -- see parse_battery_raw() docstring.
     """
@@ -114,6 +225,18 @@ def parse_diagram_raw(raw: dict[str, Any]) -> dict[str, Any]:
     soc_bdc1 = data.get("socBdc1")
     soc_bdc2 = data.get("socBdc2")
 
+    fields: dict[str, dict[str, Any]] = {}
+    for k, v in data.items():
+        if k in _STATICALLY_COVERED_DIAGRAM_KEYS:
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        fields[_sanitize_key(k)] = {
+            "label": k,
+            "unit": _infer_diagram_unit(k),
+            "value": v,
+        }
+
     return {
         "load_w": data.get("loadPower"),
         "pv_w": data.get("pvPower"),
@@ -125,12 +248,36 @@ def parse_diagram_raw(raw: dict[str, Any]) -> dict[str, Any]:
         # The portal itself shows "On-Grid"/"Off-Grid" based on this flag.
         "grid_status": data.get("minGridConnection"),
         "equipment_model": data.get("equipmentModel"),
-        # NOTE: `is_online` in this payload was 0 even while every other
+        # NOTE: is_online in this payload was 0 even while every other
         # field reflected live, current telemetry -- matches the
         # cosmetic "Offline" bug seen in the portal's own Devices list.
         # Deliberately not used for anything; kept in raw for reference.
+        "fields": fields,
         "raw": raw,
     }
+
+
+def parse_power_curve_raw(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a raw /flows/curve/power (portal's "Energy" tab) response.
+
+    Field shape not yet confirmed from a live captured response -- this
+    just exposes whatever the endpoint returns via the "fields"/"raw" dict
+    so a raw diagnostic sensor can show the real shape, the same way
+    parse_battery_raw/parse_diagram_raw were originally refined. Today's
+    energy totals were confirmed to exist on this tab via a portal
+    screenshot (PV Energy Production, Energy Production (AC), System
+    Energy Production, Load Consumption (From System), Energy From/To
+    Grid, Discharged, Charged, SOC) but the exact JSON key names this
+    endpoint uses are still unverified.
+    """
+    data = _payload(raw)
+    fields: dict[str, dict[str, Any]] = {}
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+                continue
+            fields[_sanitize_key(k)] = {"label": k, "unit": "", "value": v}
+    return {"fields": fields, "raw": raw}
 
 
 class VidaGridApiClient:
@@ -194,7 +341,7 @@ class VidaGridApiClient:
         return {"raw": raw}
 
     async def async_get_power_curve(self, sn: str) -> dict[str, Any]:
-        """Fetch the historical power curve for one inverter (today, by default)."""
+        """Fetch the historical power/energy curve for one inverter (today, by default)."""
         raw = await self._get(EP_INVERTER_POWER_CURVE.format(sn=sn))
         _LOGGER.debug("VidaGrid power curve raw response for %s: %s", sn, raw)
-        return {"raw": raw}
+        return parse_power_curve_raw(raw)
