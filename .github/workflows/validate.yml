@@ -10,13 +10,6 @@ on:
 jobs:
   hassfest:
     runs-on: ubuntu-latest
-    # The upstream hassfest Docker image currently crashes with an unrelated
-    # "KeyError: 'codeowners'" while validating integrations bundled inside
-    # its own image, not this repo's manifest (ours already has a valid
-    # codeowners key and passes hacs/action's own manifest check below).
-    # See https://community.home-assistant.io/t/895243. Non-blocking until
-    # upstream fixes it.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: home-assistant/actions/hassfest@master
