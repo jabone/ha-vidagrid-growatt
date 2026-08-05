@@ -28,6 +28,9 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import VidaGridCoordinator
 
+# All sections a dynamic field sensor / raw diagnostic sensor may come from.
+_DYNAMIC_SECTIONS: tuple[str, ...] = ("battery", "diagram", "power_curve", "energy_curve")
+
 
 @dataclass(frozen=True, kw_only=True)
 class VidaGridSensorDescription(SensorEntityDescription):
@@ -157,8 +160,8 @@ _UNIT_TO_DEVICE_CLASS: dict[str, tuple[SensorDeviceClass | None, str | None]] = 
     "A": (SensorDeviceClass.CURRENT, UnitOfElectricCurrent.AMPERE),
     "kWh": (SensorDeviceClass.ENERGY, UnitOfEnergy.KILO_WATT_HOUR),
     "%": (None, PERCENTAGE),
-    "℃": (SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
-    "°C": (SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
+    "â": (SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
+    "Â°C": (SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
 }
 
 # Fields whose *label* (not unit) marks them as internal/diagnostic detail --
@@ -190,24 +193,23 @@ async def async_setup_entry(
     for sn in coordinator.inverter_sns:
         for description in SENSOR_TYPES:
             entities.append(VidaGridSensor(coordinator, entry, sn, description))
-        entities.append(VidaGridRawDataSensor(coordinator, entry, sn, "battery"))
-        entities.append(VidaGridRawDataSensor(coordinator, entry, sn, "diagram"))
-        entities.append(VidaGridRawDataSensor(coordinator, entry, sn, "power_curve"))
+        for section_name in _DYNAMIC_SECTIONS:
+            entities.append(VidaGridRawDataSensor(coordinator, entry, sn, section_name))
 
     async_add_entities(entities)
 
     # Comprehensive field coverage: every leaf metric the battery/diagram/
-    # power_curve endpoints return gets its own entity. The pasted-token
-    # fallback poll that normally populates coordinator.data before this
-    # function even runs is unreliable (the token is frequently already
-    # expired by the time HA restarts), so entity discovery can't just
-    # happen once here -- it also has to react to every later coordinator
-    # update, since that's what the frequent, reliable webhook push
-    # (battery + diagram only, every ~3 min) actually drives. Re-running
-    # this on each update and skipping already-known (section, field_key)
-    # pairs means new fields get added exactly once, whenever the data
-    # carrying them first successfully arrives -- covering both a lucky
-    # fresh-token poll at startup and the ordinary webhook-only case.
+    # power_curve/energy_curve endpoints return gets its own entity. The
+    # pasted-token fallback poll that normally populates coordinator.data
+    # before this function even runs is unreliable (the token is frequently
+    # already expired by the time HA restarts), so entity discovery can't
+    # just happen once here -- it also has to react to every later
+    # coordinator update, since that's what the frequent, reliable webhook
+    # push actually drives. Re-running this on each update and skipping
+    # already-known (section, field_key) pairs means new fields get added
+    # exactly once, whenever the data carrying them first successfully
+    # arrives -- covering both a lucky fresh-token poll at startup and the
+    # ordinary webhook-only case.
     known_fields: dict[str, set[tuple[str, str]]] = {sn: set() for sn in coordinator.inverter_sns}
 
     @callback
@@ -217,7 +219,7 @@ async def async_setup_entry(
             data = coordinator.data.get(sn) if coordinator.data else None
             if not data:
                 continue
-            for section_name in ("battery", "diagram", "power_curve"):
+            for section_name in _DYNAMIC_SECTIONS:
                 section = data.get(section_name) or {}
                 for field_key, field in (section.get("fields") or {}).items():
                     dedup_key = (section_name, field_key)
@@ -277,14 +279,17 @@ class VidaGridSensor(CoordinatorEntity[VidaGridCoordinator], SensorEntity):
 
 
 class VidaGridFieldSensor(CoordinatorEntity[VidaGridCoordinator], SensorEntity):
-    """A dynamically-discovered field from the raw battery or diagram payload.
+    """A dynamically-discovered field from a raw battery/diagram/curve payload.
 
     Covers everything the hand-picked VidaGridSensor entries above don't --
     per-battery-pack diagnostics (APX BM1..BM5: SOC/SOH/voltage/current/
-    temperature/cycle count/etc.), BDC-level detail, and any other /diagram
-    field beyond Load/Solar Power. Unit and device class are inferred from
-    the field's own reported unit string rather than hand-declared, since
-    there are ~250 of these across both endpoints.
+    temperature/cycle count/etc.), BDC-level detail, any other /diagram
+    field beyond Load/Solar Power, today's cumulative energy totals
+    (production, load consumption, grid import/export, charge/discharge --
+    from /flows/curve/energy), and the latest instantaneous-power snapshot
+    (from /flows/curve/power). Unit and device class are inferred from the
+    field's own reported unit string rather than hand-declared, since there
+    are hundreds of these across all four endpoints.
     """
 
     _attr_has_entity_name = True
