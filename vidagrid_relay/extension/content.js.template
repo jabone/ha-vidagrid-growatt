@@ -4,18 +4,20 @@
 // shares the page's own live session. It reads whatever bearer token the
 // page currently holds from localStorage (the exact same thing the page's
 // own JS does for every request) and uses it to fetch fresh battery/diagram/
-// power-curve data, then POSTs only that data -- never the token -- to a
-// Home Assistant webhook. As long as this tab/browser stays open and logged
-// in, the token itself can expire and refresh silently in the background;
-// this script re-reads it fresh on every cycle so it's never left holding a
-// stale copy.
+// power-curve/energy-curve data, then POSTs only that data -- never the
+// token -- to a Home Assistant webhook. As long as this tab/browser stays
+// open and logged in, the token itself can expire and refresh silently in
+// the background; this script re-reads it fresh on every cycle so it's
+// never left holding a stale copy.
 //
-// v1.1.0: also relays /flows/curve/power (the portal's "Energy" tab data --
-// PV/AC production, grid import/export, charge/discharge totals, SOC). This
-// closes the last gap where a field depended on a manually-pasted, short-
-// lived bearer token via the integration's slow fallback poll instead of
-// this always-fresh browser session -- same fix as battery/diagram already
-// got, just applied to the third endpoint.
+// v1.1.0: added /flows/curve/power to the relay.
+// v1.2.0: fixed both curve endpoints to include the startTime/endTime/type
+// query params they actually require (confirmed via a live browser network
+// capture of the portal's own "Energy&Power" tab on 2026-08-04 -- without
+// these params both endpoints return HTTP 200 with an empty "data"), and
+// added /flows/curve/energy (the portal's "Energy" tab totals: PV/AC/system
+// production, load consumption, grid import/export, charge/discharge) as a
+// second curve fetch alongside the existing power one.
 //
 // This file is a TEMPLATE. The __HA_WEBHOOK_URL__ and __INVERTER_SNS_JSON__
 // placeholders below are filled in automatically at container start by
@@ -38,6 +40,32 @@
     const raw = window.localStorage.getItem("authorization");
     if (!raw) return null;
     return raw.startsWith("Bearer ") ? raw : "Bearer " + raw;
+  }
+
+  // Both /flows/curve/* endpoints require startTime/endTime covering the
+  // selected day, as an ISO 8601 string with an explicit UTC offset (e.g.
+  // "2026-08-04T00:00:00-05:00" -- NOT "Z"), plus type=5m for 5-minute
+  // granularity. Built from the browser's own local time/offset so it
+  // matches whatever "today" means for this account, same as the portal's
+  // own JS does.
+  function todayRangeQuery() {
+    const now = new Date();
+    const offsetMin = -now.getTimezoneOffset();
+    const sign = offsetMin >= 0 ? "+" : "-";
+    const abs = Math.abs(offsetMin);
+    const oh = String(Math.floor(abs / 60)).padStart(2, "0");
+    const om = String(abs % 60).padStart(2, "0");
+    const offset = sign + oh + ":" + om;
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+    const start = y + "-" + m + "-" + d + "T00:00:00" + offset;
+    const end = y + "-" + m + "-" + d + "T23:59:59" + offset;
+    return (
+      "startTime=" + encodeURIComponent(start) +
+      "&endTime=" + encodeURIComponent(end) +
+      "&type=5m"
+    );
   }
 
   async function fetchJsonOrNull(path, auth) {
@@ -63,13 +91,15 @@
       return;
     }
     try {
-      const [battery, diagram, powerCurve] = await Promise.all([
+      const range = todayRangeQuery();
+      const [battery, diagram, powerCurve, energyCurve] = await Promise.all([
         fetchJsonOrNull("/web/v1/inverter/" + sn + "/battery", auth),
         fetchJsonOrNull("/web/v1/inverter/" + sn + "/diagram", auth),
-        fetchJsonOrNull("/web/v1/inverter/" + sn + "/flows/curve/power", auth),
+        fetchJsonOrNull("/web/v1/inverter/" + sn + "/flows/curve/power?" + range, auth),
+        fetchJsonOrNull("/web/v1/inverter/" + sn + "/flows/curve/energy?" + range, auth),
       ]);
 
-      if (!battery && !diagram && !powerCurve) {
+      if (!battery && !diagram && !powerCurve && !energyCurve) {
         console.warn("[VidaGrid relay] all fetches failed for", sn, "-- skipping push");
         return;
       }
@@ -78,6 +108,7 @@
       if (battery) body.battery = battery;
       if (diagram) body.diagram = diagram;
       if (powerCurve) body.power_curve = powerCurve;
+      if (energyCurve) body.energy_curve = energyCurve;
 
       const resp = await fetch(HA_WEBHOOK_URL, {
         method: "POST",
