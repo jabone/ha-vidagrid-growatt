@@ -1,0 +1,8 @@
+# Default owner for everything in the repo
+* @jabone
+
+# Explicit ownership of the Home Assistant integration itself
+/custom_components/vidagrid_growatt/ @jabone
+
+# Owner of the companion relay add-on
+/vidagrid_relay/ @jabone
