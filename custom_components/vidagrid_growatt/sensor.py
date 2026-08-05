@@ -20,7 +20,7 @@ from homeassistant.const import (
     UnitOfPower,
     UnitOfTemperature,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -194,20 +194,37 @@ async def async_setup_entry(
         entities.append(VidaGridRawDataSensor(coordinator, entry, sn, "diagram"))
         entities.append(VidaGridRawDataSensor(coordinator, entry, sn, "power_curve"))
 
-        # Comprehensive field coverage: every leaf metric the battery/diagram
-        # endpoints returned on this integration's very first successful
-        # refresh (which __init__.py awaits before setting up this platform,
-        # so coordinator.data is already populated here) gets its own entity.
-        # Growatt's field set for a given account is effectively fixed, so
-        # discovering it once at setup -- rather than watching for new keys
-        # on every later refresh -- keeps this simple and the entity list
-        # stable across restarts.
-        data = coordinator.data.get(sn) if coordinator.data else None
-        if data:
+    async_add_entities(entities)
+
+    # Comprehensive field coverage: every leaf metric the battery/diagram/
+    # power_curve endpoints return gets its own entity. The pasted-token
+    # fallback poll that normally populates coordinator.data before this
+    # function even runs is unreliable (the token is frequently already
+    # expired by the time HA restarts), so entity discovery can't just
+    # happen once here -- it also has to react to every later coordinator
+    # update, since that's what the frequent, reliable webhook push
+    # (battery + diagram only, every ~3 min) actually drives. Re-running
+    # this on each update and skipping already-known (section, field_key)
+    # pairs means new fields get added exactly once, whenever the data
+    # carrying them first successfully arrives -- covering both a lucky
+    # fresh-token poll at startup and the ordinary webhook-only case.
+    known_fields: dict[str, set[tuple[str, str]]] = {sn: set() for sn in coordinator.inverter_sns}
+
+    @callback
+    def _discover_new_fields() -> None:
+        new_entities: list[SensorEntity] = []
+        for sn in coordinator.inverter_sns:
+            data = coordinator.data.get(sn) if coordinator.data else None
+            if not data:
+                continue
             for section_name in ("battery", "diagram", "power_curve"):
                 section = data.get(section_name) or {}
                 for field_key, field in (section.get("fields") or {}).items():
-                    entities.append(
+                    dedup_key = (section_name, field_key)
+                    if dedup_key in known_fields[sn]:
+                        continue
+                    known_fields[sn].add(dedup_key)
+                    new_entities.append(
                         VidaGridFieldSensor(
                             coordinator,
                             sn,
@@ -217,8 +234,11 @@ async def async_setup_entry(
                             field.get("unit") or "",
                         )
                     )
+        if new_entities:
+            async_add_entities(new_entities)
 
-    async_add_entities(entities)
+    _discover_new_fields()
+    entry.async_on_unload(coordinator.async_add_listener(_discover_new_fields))
 
 
 class VidaGridSensor(CoordinatorEntity[VidaGridCoordinator], SensorEntity):
