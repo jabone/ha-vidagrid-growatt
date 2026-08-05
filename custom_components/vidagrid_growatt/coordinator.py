@@ -11,11 +11,11 @@ Two data paths feed this coordinator:
    re-auth prompt every time.
 2. A webhook push (`ingest()`, called from webhook.py) fed by a userscript
    running in the user's own already-authenticated browser tab. This is
-   the primary, frequent, sustainable path for battery, diagram, AND
-   power_curve data -- see README.md and vidagrid_relay/README.md. As of
-   the userscript's v1.1.0, this is the only path power_curve needs; the
-   fallback poll's own power_curve fetch (below) is now just a secondary
-   safety net rather than power_curve's sole source.
+   the primary, frequent, sustainable path for battery, diagram, power_curve,
+   AND energy_curve data -- see README.md and vidagrid_relay/README.md. As
+   of the userscript's v1.2.0, this is the only path the two curve
+   endpoints need; the fallback poll's own curve fetches (below) are now
+   just a secondary safety net rather than their sole source.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from .api import (
     VidaGridApiClient,
@@ -33,15 +34,23 @@ from .api import (
     VidaGridAuthError,
     parse_battery_raw,
     parse_diagram_raw,
+    parse_energy_curve_raw,
     parse_power_curve_raw,
 )
 from .const import DEFAULT_SCAN_INTERVAL_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
+_EMPTY_CACHE_ENTRY = {
+    "battery": None,
+    "diagram": None,
+    "power_curve": None,
+    "energy_curve": None,
+}
+
 
 class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Hold battery + diagram + power_curve data for every configured inverter.
+    """Hold battery/diagram/power_curve/energy_curve data for every configured inverter.
 
     Populated by a best-effort fallback poll and/or webhook pushes; never
     raises out of _async_update_data after the very first successful
@@ -65,7 +74,7 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.api = api
         self.inverter_sns = inverter_sns
         self._cache: dict[str, dict[str, Any]] = {
-            sn: {"battery": None, "diagram": None, "power_curve": None} for sn in inverter_sns
+            sn: dict(_EMPTY_CACHE_ENTRY) for sn in inverter_sns
         }
         self._ever_succeeded = False
         # Entities register themselves here (see sensor.py / binary_sensor.py)
@@ -89,10 +98,12 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         any_success = False
         last_error: Exception | None = None
+        now = dt_util.now()
 
         for sn in self.inverter_sns:
+            self._cache.setdefault(sn, dict(_EMPTY_CACHE_ENTRY))
+
             try:
-                self._cache.setdefault(sn, {"battery": None, "diagram": None, "power_curve": None})
                 self._cache[sn]["battery"] = await self.api.async_get_battery(sn)
                 any_success = True
             except (VidaGridAuthError, VidaGridApiError) as err:
@@ -107,10 +118,17 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 last_error = err
 
             try:
-                self._cache[sn]["power_curve"] = await self.api.async_get_power_curve(sn)
+                self._cache[sn]["power_curve"] = await self.api.async_get_power_curve(sn, now)
                 any_success = True
             except (VidaGridAuthError, VidaGridApiError) as err:
                 _LOGGER.debug("Fallback power curve poll failed for %s: %s", sn, err)
+                last_error = err
+
+            try:
+                self._cache[sn]["energy_curve"] = await self.api.async_get_energy_curve(sn, now)
+                any_success = True
+            except (VidaGridAuthError, VidaGridApiError) as err:
+                _LOGGER.debug("Fallback energy curve poll failed for %s: %s", sn, err)
                 last_error = err
 
         if any_success:
@@ -133,15 +151,18 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         battery_raw: dict[str, Any] | None = None,
         diagram_raw: dict[str, Any] | None = None,
         power_curve_raw: dict[str, Any] | None = None,
+        energy_curve_raw: dict[str, Any] | None = None,
     ) -> None:
         """Merge a webhook-pushed raw payload into the cache and notify entities."""
-        self._cache.setdefault(sn, {"battery": None, "diagram": None, "power_curve": None})
+        self._cache.setdefault(sn, dict(_EMPTY_CACHE_ENTRY))
         if battery_raw is not None:
             self._cache[sn]["battery"] = parse_battery_raw(battery_raw)
         if diagram_raw is not None:
             self._cache[sn]["diagram"] = parse_diagram_raw(diagram_raw)
         if power_curve_raw is not None:
             self._cache[sn]["power_curve"] = parse_power_curve_raw(power_curve_raw)
+        if energy_curve_raw is not None:
+            self._cache[sn]["energy_curve"] = parse_energy_curve_raw(energy_curve_raw)
         self._ever_succeeded = True
 
         # Normal path: updates .data, reschedules the fallback poll timer,
