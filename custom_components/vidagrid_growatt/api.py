@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import aiohttp
@@ -259,7 +259,7 @@ def parse_diagram_raw(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _today_range_params(now: datetime) -> dict[str, str]:
+def _day_range_params(now: datetime, days_ago: int = 0) -> dict[str, str]:
     """Build the startTime/endTime/type query params both curve endpoints require.
 
     Confirmed via live browser network capture on 2026-08-04: the portal's own
@@ -269,9 +269,14 @@ def _today_range_params(now: datetime) -> dict[str, str]:
     granularity. Without these params both endpoints return HTTP 200 with an
     empty/null "data" -- that empty response is what this integration got the
     first time it wired these endpoints in, before the params were known.
+
+    `days_ago` shifts the queried calendar day back (0 = today, 1 =
+    yesterday, ...) -- see async_get_power_curve()/async_get_energy_curve()
+    for why that matters on some accounts.
     """
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = now.replace(hour=23, minute=59, second=59, microsecond=0)
+    target = now - timedelta(days=days_ago)
+    start = target.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = target.replace(hour=23, minute=59, second=59, microsecond=0)
     return {"startTime": start.isoformat(), "endTime": end.isoformat(), "type": "5m"}
 
 
@@ -317,6 +322,14 @@ def _parse_curve_raw(raw: dict[str, Any]) -> dict[str, Any]:
     latest = data[-1] if isinstance(data, list) and data else None
     fields = _flatten_flat_numeric_dict(latest) if isinstance(latest, dict) else {}
     return {"fields": fields, "latest": latest, "raw": raw}
+
+
+def _curve_has_data(raw: dict[str, Any] | None) -> bool:
+    """True if a curve endpoint's response actually carries any data points."""
+    if not raw:
+        return False
+    data = _payload(raw)
+    return bool(data)
 
 
 def parse_power_curve_raw(raw: dict[str, Any]) -> dict[str, Any]:
@@ -391,25 +404,47 @@ class VidaGridApiClient:
         _LOGGER.debug("VidaGrid production raw response: %s", raw)
         return {"raw": raw}
 
+    async def _async_get_curve_with_fallback(
+        self, endpoint: str, sn: str, now: datetime
+    ) -> dict[str, Any]:
+        """Fetch a curve endpoint for today, falling back to yesterday if empty.
+
+        Some accounts' curve/history rollup lags a day behind -- today's
+        range comes back HTTP 200 with "data": null even with valid params
+        and a healthy token (confirmed by comparing against the portal's own
+        Energy&Power tab, which itself defaults to showing yesterday when
+        opened). Try today first since that's what most accounts should
+        have, then fall back to yesterday once before giving up, rather than
+        returning a permanently empty result.
+        """
+        raw = await self._get(endpoint.format(sn=sn), params=_day_range_params(now, 0))
+        if _curve_has_data(raw):
+            return raw
+        _LOGGER.debug(
+            "VidaGrid curve endpoint %s returned no data for today (sn=%s); "
+            "retrying with yesterday's date range",
+            endpoint,
+            sn,
+        )
+        return await self._get(endpoint.format(sn=sn), params=_day_range_params(now, 1))
+
     async def async_get_power_curve(self, sn: str, now: datetime) -> dict[str, Any]:
-        """Fetch today's instantaneous-power history for one inverter.
+        """Fetch today's instantaneous-power history for one inverter, or yesterday's if empty.
 
         `now` should be a tz-aware datetime in the account's local timezone
-        (e.g. Home Assistant's own `dt_util.now()`) -- the endpoint requires
+        (e.g. Home Assistant's own `dt_util.now()` ) -- the endpoint requires
         startTime/endTime with an explicit UTC offset, confirmed via live
-        browser network capture (see _today_range_params()).
+        browser network capture (see _day_range_params()).
         """
-        params = _today_range_params(now)
-        raw = await self._get(EP_INVERTER_POWER_CURVE.format(sn=sn), params=params)
+        raw = await self._async_get_curve_with_fallback(EP_INVERTER_POWER_CURVE, sn, now)
         _LOGGER.debug("VidaGrid power curve raw response for %s: %s", sn, raw)
         return parse_power_curve_raw(raw)
 
     async def async_get_energy_curve(self, sn: str, now: datetime) -> dict[str, Any]:
-        """Fetch today's cumulative energy totals for one inverter (the portal's "Energy" tab).
+        """Fetch today's cumulative energy totals for one inverter, or yesterday's if empty.
 
         See async_get_power_curve() docstring re: the `now` param.
         """
-        params = _today_range_params(now)
-        raw = await self._get(EP_INVERTER_ENERGY_CURVE.format(sn=sn), params=params)
+        raw = await self._async_get_curve_with_fallback(EP_INVERTER_ENERGY_CURVE, sn, now)
         _LOGGER.debug("VidaGrid energy curve raw response for %s: %s", sn, raw)
         return parse_energy_curve_raw(raw)
