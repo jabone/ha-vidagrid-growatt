@@ -160,8 +160,8 @@ _UNIT_TO_DEVICE_CLASS: dict[str, tuple[SensorDeviceClass | None, str | None]] = 
     "A": (SensorDeviceClass.CURRENT, UnitOfElectricCurrent.AMPERE),
     "kWh": (SensorDeviceClass.ENERGY, UnitOfEnergy.KILO_WATT_HOUR),
     "%": (None, PERCENTAGE),
-    "â": (SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
-    "Â°C": (SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
+    "℃": (SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
+    "°C": (SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS),
 }
 
 # Fields whose *label* (not unit) marks them as internal/diagnostic detail --
