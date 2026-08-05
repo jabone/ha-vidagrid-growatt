@@ -28,7 +28,3 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          # Brand assets require a separate PR to home-assistant/brands and
-          # only matter for default-store listing, not for installing this
-          # repo as a HACS custom repository.
-          ignore: brands
