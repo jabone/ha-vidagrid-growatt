@@ -2,14 +2,17 @@
 
 Two data paths feed this coordinator:
 
-1. A slow fallback poll (`_async_update_data`, every
+1. A slow fallback poll (_async_update_data, every
    DEFAULT_SCAN_INTERVAL_SECONDS) using the pasted bearer token. Given the
    token has been observed expiring in as little as ~15-25 minutes, this
    path is expected to fail routinely and is treated as best-effort: a
    failed fetch just keeps the last-known-good value per inverter/section
    rather than erroring the whole entity set to unavailable or forcing a
-   re-auth prompt every time.
-2. A webhook push (`ingest()`, called from webhook.py) fed by a userscript
+   re-auth prompt every time. This is also the only path that fetches the
+   "power curve" (Energy tab) data -- the webhook push (below) only ever
+   sends battery/diagram, so those fields only refresh when this fallback
+   poll manages to run with a currently-valid token.
+2. A webhook push (ingest(), called from webhook.py) fed by a userscript
    running in the user's own already-authenticated browser tab. This is
    the primary, frequent, sustainable path -- see README.md.
 """
@@ -60,7 +63,7 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.api = api
         self.inverter_sns = inverter_sns
         self._cache: dict[str, dict[str, Any]] = {
-            sn: {"battery": None, "diagram": None} for sn in inverter_sns
+            sn: {"battery": None, "diagram": None, "power_curve": None} for sn in inverter_sns
         }
         self._ever_succeeded = False
         # Entities register themselves here (see sensor.py / binary_sensor.py)
@@ -87,7 +90,7 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         for sn in self.inverter_sns:
             try:
-                self._cache.setdefault(sn, {"battery": None, "diagram": None})
+                self._cache.setdefault(sn, {"battery": None, "diagram": None, "power_curve": None})
                 self._cache[sn]["battery"] = await self.api.async_get_battery(sn)
                 any_success = True
             except (VidaGridAuthError, VidaGridApiError) as err:
@@ -99,6 +102,13 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 any_success = True
             except (VidaGridAuthError, VidaGridApiError) as err:
                 _LOGGER.debug("Fallback diagram poll failed for %s: %s", sn, err)
+                last_error = err
+
+            try:
+                self._cache[sn]["power_curve"] = await self.api.async_get_power_curve(sn)
+                any_success = True
+            except (VidaGridAuthError, VidaGridApiError) as err:
+                _LOGGER.debug("Fallback power curve poll failed for %s: %s", sn, err)
                 last_error = err
 
         if any_success:
@@ -122,7 +132,7 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         diagram_raw: dict[str, Any] | None = None,
     ) -> None:
         """Merge a webhook-pushed raw payload into the cache and notify entities."""
-        self._cache.setdefault(sn, {"battery": None, "diagram": None})
+        self._cache.setdefault(sn, {"battery": None, "diagram": None, "power_curve": None})
         if battery_raw is not None:
             self._cache[sn]["battery"] = parse_battery_raw(battery_raw)
         if diagram_raw is not None:
