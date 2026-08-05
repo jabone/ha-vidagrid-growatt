@@ -99,7 +99,18 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # don't depend on that listener-dispatch path at all, so entities
         # stay live regardless of whether that turns out to be an upstream
         # core bug.
-        self.entities_by_sn: dict[str, list[Any]] = {sn: [] for sn in inverter_sns}
+        #
+        # Keyed by unique_id rather than a plain list: if an entity object
+        # ever gets registered twice -- e.g. a transient double platform-
+        # setup race recreates entities that already registered themselves
+        # -- the newer object replaces the older one instead of both
+        # persisting side by side forever. A stale, superseded entity
+        # object can still pass an `entity.hass is not None` check yet
+        # silently fail to reach whatever entity_id HA actually kept live,
+        # which is exactly what caused entities to go permanently silent
+        # after the first successful webhook cycle in practice (see
+        # home-assistant/core#178145 and the project README).
+        self.entities_by_sn: dict[str, dict[Any, Any]] = {sn: {} for sn in inverter_sns}
 
         # Account-level (not per-inverter) relay session status, reported by
         # the browser relay extension on every webhook push. `logged_in` is
@@ -108,8 +119,18 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._relay_status_entities: list[Any] = []
 
     def register_entity(self, sn: str, entity: Any) -> None:
-        """Track an entity so ingest() can write its state directly."""
-        self.entities_by_sn.setdefault(sn, []).append(entity)
+        """Track an entity so ingest() can write its state directly.
+
+        Deduplicated by unique_id so a re-created entity object replaces
+        its predecessor instead of accumulating alongside it -- see the
+        comment in __init__ for why this matters.
+        """
+        key = (
+            getattr(entity, "_attr_unique_id", None)
+            or getattr(entity, "unique_id", None)
+            or id(entity)
+        )
+        self.entities_by_sn.setdefault(sn, {})[key] = entity
 
     def register_relay_status_entity(self, entity: Any) -> None:
         """Track an entity (e.g. the relay-session binary sensor) for direct writes."""
@@ -191,18 +212,27 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Belt-and-suspenders path: also write the affected entities'
         # state directly, bypassing the listener-notification mechanism
-        # entirely. See the comment in __init__ for why.
+        # entirely. See the comment in __init__ for why. Stale entries
+        # (entity.hass is None -- a superseded/torn-down entity object)
+        # are pruned here rather than left to accumulate forever.
         direct_written = 0
-        for entity in self.entities_by_sn.get(sn, []):
+        stale_keys: list[Any] = []
+        for key, entity in self.entities_by_sn.get(sn, {}).items():
             if getattr(entity, "hass", None) is not None:
                 entity.async_write_ha_state()
                 direct_written += 1
+            else:
+                stale_keys.append(key)
+        total_before_prune = len(self.entities_by_sn.get(sn, {}))
+        for key in stale_keys:
+            self.entities_by_sn[sn].pop(key, None)
         _LOGGER.debug(
             "ingest(%s): notified via coordinator listeners, and directly "
-            "wrote %d/%d registered entities",
+            "wrote %d/%d registered entities (%d stale entries pruned)",
             sn,
             direct_written,
-            len(self.entities_by_sn.get(sn, [])),
+            total_before_prune,
+            len(stale_keys),
         )
 
     def set_relay_logged_in(self, logged_in: bool) -> None:
