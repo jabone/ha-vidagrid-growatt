@@ -127,19 +127,36 @@ value in the meantime rather than going unavailable.
 
 ## Entities
 
-Per configured inverter (`sensor.growatt_inverter_<sn>_*`,
-`binary_sensor.growatt_inverter_<sn>_*`):
+Home Assistant ends up with a lot of entities per inverter -- several
+hundred, not a handful -- because the integration flattens every field of
+the portal's raw battery/BDC/BMS API responses into its own diagnostic
+sensor rather than silently dropping data the portal exposes. The exact,
+current list is easiest to browse live in Home Assistant (**Settings ->
+Devices & Services -> Devices -> Growatt Inverter `<SN>`**), since most of
+it mirrors whatever fields the undocumented API happens to return.
 
-- Battery: level, connect status, BMS type, pack count, bus reference
-voltage, discharge/charge power.
-- Live diagram: load power, solar power, grid power, battery power, grid
-status (on/off-grid).
-- Power curve (today, ~5-minute resolution): discharge power, PV power,
-and related fields from the portal's "Energy & Power" tab.
-- Energy curve (today's totals): consumption, charge, discharge,
-from-grid, to-grid.
-- Raw diagnostic sensors carrying each endpoint's full unprocessed
-payload, for anyone who wants to build their own template sensors.
+The entities most people actually want on a dashboard, per configured
+inverter (`<sn>` = the inverter's serial number, lowercased):
+
+- `sensor.growatt_inverter_<sn>_battery_level` -- state of charge (%).
+- `sensor.growatt_inverter_<sn>_battery_charge_power` /
+`_battery_discharge_power` -- battery charge/discharge power (W).
+- `sensor.growatt_inverter_<sn>_battery_connect_status`,
+`_battery_bms_type`, `_battery_pack_count`,
+`_battery_bus_reference_voltage` -- battery pack/BMS status.
+- `sensor.growatt_inverter_<sn>_load_power`, `_solar_power`,
+`_grid_power`, `_battery_power` -- the live power-flow diagram.
+- `binary_sensor.growatt_inverter_<sn>_grid_status` -- on/off-grid.
+
+Everything else per inverter is diagnostic: `_raw_battery_data` and
+`_raw_diagram_data` carry those endpoints' full unprocessed payloads;
+`_raw_power_curve_data` and `_raw_energy_curve_data` carry the portal's
+"Energy & Power" tab data as single JSON blobs (today's power/energy
+curves aren't broken out into individual per-field sensors); and several
+hundred more `_information_bdc1_*`, `_bdc1_debug_information`, and
+`_apx_bm<n>_debug_information` sensors expose hardware/firmware version
+fields and raw debug blobs most people will never look at, but that are
+there if you want to build your own template sensors on top of them.
 
 Account-level (one per config entry, not per inverter):
 
