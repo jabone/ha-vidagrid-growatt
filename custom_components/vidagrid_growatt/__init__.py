@@ -12,7 +12,13 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from . import webhook as vidagrid_webhook
 from .api import VidaGridApiClient, VidaGridApiError, VidaGridAuthError
-from .const import CONF_BASE_URL, CONF_BEARER_TOKEN, CONF_INVERTER_SNS, CONF_WEBHOOK_ID, DOMAIN
+from .const import (
+    CONF_BASE_URL,
+    CONF_BEARER_TOKEN,
+    CONF_INVERTER_SNS,
+    CONF_WEBHOOK_ID,
+    DOMAIN,
+)
 from .coordinator import VidaGridCoordinator
 
 PLATFORMS = ["sensor", "binary_sensor"]
@@ -20,8 +26,12 @@ PLATFORMS = ["sensor", "binary_sensor"]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     session = async_get_clientsession(hass)
-    api = VidaGridApiClient(session, entry.data[CONF_BASE_URL], entry.data[CONF_BEARER_TOKEN])
-    inverter_sns = [s.strip() for s in entry.data[CONF_INVERTER_SNS].split(",") if s.strip()]
+    api = VidaGridApiClient(
+        session, entry.data[CONF_BASE_URL], entry.data[CONF_BEARER_TOKEN]
+    )
+    inverter_sns = [
+        s.strip() for s in entry.data[CONF_INVERTER_SNS].split(",") if s.strip()
+    ]
 
     coordinator = VidaGridCoordinator(hass, api, inverter_sns)
 
