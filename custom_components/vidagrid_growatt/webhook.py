@@ -46,9 +46,9 @@ _LOGGER = logging.getLogger(__name__)
 async def _handle_webhook(
     hass: HomeAssistant, webhook_id: str, request: web.Request
 ) -> web.Response:
-    coordinator: VidaGridCoordinator | None = hass.data.get("vidagrid_growatt_webhooks", {}).get(
-        webhook_id
-    )
+    coordinator: VidaGridCoordinator | None = hass.data.get(
+        "vidagrid_growatt_webhooks", {}
+    ).get(webhook_id)
     if coordinator is None:
         _LOGGER.warning(
             "Webhook hit for id=%s but no coordinator is registered for it "
@@ -119,7 +119,7 @@ async def _handle_webhook(
             power_curve_raw=power_curve_raw,
             energy_curve_raw=energy_curve_raw,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         _LOGGER.exception("Failed to ingest webhook payload for %s", sn)
         return web.Response(status=500, text="ingest failed")
 
@@ -135,7 +135,9 @@ async def _handle_webhook(
     return web.Response(status=200, text="ok")
 
 
-def register(hass: HomeAssistant, webhook_id: str, coordinator: VidaGridCoordinator) -> None:
+def register(
+    hass: HomeAssistant, webhook_id: str, coordinator: VidaGridCoordinator
+) -> None:
     """Register this config entry's webhook and track its coordinator."""
     existing = hass.data.get("vidagrid_growatt_webhooks", {}).get(webhook_id)
     _LOGGER.warning(
