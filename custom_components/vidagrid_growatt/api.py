@@ -42,9 +42,9 @@ import aiohttp
 from .const import (
     EP_INVERTER_BATTERY,
     EP_INVERTER_DIAGRAM,
-    EP_INVERTER_PRODUCTION,
     EP_INVERTER_ENERGY_CURVE,
     EP_INVERTER_POWER_CURVE,
+    EP_INVERTER_PRODUCTION,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -243,7 +243,9 @@ def parse_diagram_raw(raw: dict[str, Any]) -> dict[str, Any]:
         "load_w": data.get("loadPower"),
         "pv_w": data.get("pvPower"),
         # Positive = importing from grid, negative = exporting to grid.
-        "grid_w": (power_to_user - power_to_grid) if (power_to_user or power_to_grid) else 0,
+        "grid_w": (power_to_user - power_to_grid)
+        if (power_to_user or power_to_grid)
+        else 0,
         # Positive = battery discharging (powering the home), negative = charging.
         "battery_w": discharge - charge,
         "battery_soc_percent": soc_bdc1 if soc_bdc1 else soc_bdc2,
@@ -359,7 +361,9 @@ class VidaGridApiClient:
         """Update the stored bearer token (e.g. after re-auth)."""
         self._token = bearer_token
 
-    async def _get(self, path: str, params: dict[str, str] | None = None) -> dict[str, Any]:
+    async def _get(
+        self, path: str, params: dict[str, str] | None = None
+    ) -> dict[str, Any]:
         url = f"{self._base_url}{path}"
         headers = {
             "Accept": "application/json",
@@ -367,13 +371,18 @@ class VidaGridApiClient:
         }
         try:
             async with self._session.get(
-                url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=20)
+                url,
+                headers=headers,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=20),
             ) as resp:
                 if resp.status in (401, 403):
                     raise VidaGridAuthError(f"Auth rejected ({resp.status}) for {path}")
                 if resp.status != 200:
                     text = await resp.text()
-                    raise VidaGridApiError(f"HTTP {resp.status} for {path}: {text[:200]}")
+                    raise VidaGridApiError(
+                        f"HTTP {resp.status} for {path}: {text[:200]}"
+                    )
                 try:
                     return await resp.json(content_type=None)
                 except ValueError as err:
@@ -436,7 +445,9 @@ class VidaGridApiClient:
         startTime/endTime with an explicit UTC offset, confirmed via live
         browser network capture (see _day_range_params()).
         """
-        raw = await self._async_get_curve_with_fallback(EP_INVERTER_POWER_CURVE, sn, now)
+        raw = await self._async_get_curve_with_fallback(
+            EP_INVERTER_POWER_CURVE, sn, now
+        )
         _LOGGER.debug("VidaGrid power curve raw response for %s: %s", sn, raw)
         return parse_power_curve_raw(raw)
 
@@ -445,6 +456,8 @@ class VidaGridApiClient:
 
         See async_get_power_curve() docstring re: the `now` param.
         """
-        raw = await self._async_get_curve_with_fallback(EP_INVERTER_ENERGY_CURVE, sn, now)
+        raw = await self._async_get_curve_with_fallback(
+            EP_INVERTER_ENERGY_CURVE, sn, now
+        )
         _LOGGER.debug("VidaGrid energy curve raw response for %s: %s", sn, raw)
         return parse_energy_curve_raw(raw)
