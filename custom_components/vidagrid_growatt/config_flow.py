@@ -20,14 +20,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import aiohttp
 import voluptuous as vol
-
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import VidaGridApiClient, VidaGridAuthError, VidaGridApiError
+from .api import VidaGridApiClient, VidaGridApiError, VidaGridAuthError
 from .const import (
     CONF_BASE_URL,
     CONF_BEARER_TOKEN,
@@ -84,7 +82,7 @@ class VidaGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "cannot_connect"
             except ValueError:
                 errors["base"] = "no_inverters"
-            except Exception:  # noqa: BLE001
+            except Exception:
                 _LOGGER.exception("Unexpected error validating VidaGrid token")
                 errors["base"] = "unknown"
             else:
@@ -141,18 +139,25 @@ class VidaGridConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         assert self._reauth_entry is not None
 
         if user_input is not None:
-            new_data = {**self._reauth_entry.data, CONF_BEARER_TOKEN: user_input[CONF_BEARER_TOKEN]}
+            new_data = {
+                **self._reauth_entry.data,
+                CONF_BEARER_TOKEN: user_input[CONF_BEARER_TOKEN],
+            }
             try:
                 await _validate(self.hass, new_data)
             except VidaGridAuthError:
                 errors["base"] = "invalid_auth"
             except VidaGridApiError:
                 errors["base"] = "cannot_connect"
-            except Exception:  # noqa: BLE001
-                _LOGGER.exception("Unexpected error validating VidaGrid token during reauth")
+            except Exception:
+                _LOGGER.exception(
+                    "Unexpected error validating VidaGrid token during reauth"
+                )
                 errors["base"] = "unknown"
             else:
-                self.hass.config_entries.async_update_entry(self._reauth_entry, data=new_data)
+                self.hass.config_entries.async_update_entry(
+                    self._reauth_entry, data=new_data
+                )
                 await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
                 return self.async_abort(reason="reauth_successful")
 
