@@ -174,12 +174,15 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         attribute, relying on the entity registry's own name resolution
         instead, which is how these entities were already being displayed).
         """
-        if getattr(entity, "hass", None) is None or getattr(entity, "entity_id", None) is None:
+        if (
+            getattr(entity, "hass", None) is None
+            or getattr(entity, "entity_id", None) is None
+        ):
             return False
 
         try:
             state = entity.state
-        except Exception:  # noqa: BLE001
+        except Exception:
             _LOGGER.debug(
                 "Direct state-machine write: entity.state raised for %s",
                 getattr(entity, "entity_id", "?"),
@@ -231,14 +234,18 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 last_error = err
 
             try:
-                self._cache[sn]["power_curve"] = await self.api.async_get_power_curve(sn, now)
+                self._cache[sn]["power_curve"] = await self.api.async_get_power_curve(
+                    sn, now
+                )
                 any_success = True
             except (VidaGridAuthError, VidaGridApiError) as err:
                 _LOGGER.debug("Fallback power curve poll failed for %s: %s", sn, err)
                 last_error = err
 
             try:
-                self._cache[sn]["energy_curve"] = await self.api.async_get_energy_curve(sn, now)
+                self._cache[sn]["energy_curve"] = await self.api.async_get_energy_curve(
+                    sn, now
+                )
                 any_success = True
             except (VidaGridAuthError, VidaGridApiError) as err:
                 _LOGGER.debug("Fallback energy curve poll failed for %s: %s", sn, err)
@@ -330,8 +337,8 @@ class VidaGridCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "out, so fresh battery/solar data has stopped flowing.\n\n"
                     "Open **Settings > Add-ons > VidaGrid Relay > Open Web "
                     "UI**, sign back into growatt-us.vidagrid.com (solving "
-                    "the captcha), and check any \"stay signed in\" or "
-                    "\"remember me\" option the portal offers so this "
+                    'the captcha), and check any "stay signed in" or '
+                    '"remember me" option the portal offers so this '
                     "happens as rarely as possible -- the same tradeoff "
                     "apps like Nest or Apple Home ask you to make. Data "
                     "resumes automatically once you're logged back in; "
