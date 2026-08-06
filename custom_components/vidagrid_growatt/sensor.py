@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -29,7 +29,12 @@ from .const import DOMAIN
 from .coordinator import VidaGridCoordinator
 
 # All sections a dynamic field sensor / raw diagnostic sensor may come from.
-_DYNAMIC_SECTIONS: tuple[str, ...] = ("battery", "diagram", "power_curve", "energy_curve")
+_DYNAMIC_SECTIONS: tuple[str, ...] = (
+    "battery",
+    "diagram",
+    "power_curve",
+    "energy_curve",
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -169,11 +174,34 @@ _UNIT_TO_DEVICE_CLASS: dict[str, tuple[SensorDeviceClass | None, str | None]] = 
 # cell-index pointers, etc. -- kept out of the main dashboard view even
 # though some of them carry a normal-looking unit.
 _DIAGNOSTIC_LABEL_HINTS = (
-    "debug", "fault", "warn", "error", "protect", "software", "firmware",
-    "version", "cell no", "cycle", "protocol", "manufacturer", "request flag",
-    "wakeup", "type id", "cluster", "comm id", "derated mode", "sub code",
-    "status", "history", "board", "auth version", "permillage", "internal state",
-    "sn", "model", "code",
+    "debug",
+    "fault",
+    "warn",
+    "error",
+    "protect",
+    "software",
+    "firmware",
+    "version",
+    "cell no",
+    "cycle",
+    "protocol",
+    "manufacturer",
+    "request flag",
+    "wakeup",
+    "type id",
+    "cluster",
+    "comm id",
+    "derated mode",
+    "sub code",
+    "status",
+    "history",
+    "board",
+    "auth version",
+    "permillage",
+    "internal state",
+    "sn",
+    "model",
+    "code",
 )
 
 
@@ -210,7 +238,9 @@ async def async_setup_entry(
     # exactly once, whenever the data carrying them first successfully
     # arrives -- covering both a lucky fresh-token poll at startup and the
     # ordinary webhook-only case.
-    known_fields: dict[str, set[tuple[str, str]]] = {sn: set() for sn in coordinator.inverter_sns}
+    known_fields: dict[str, set[tuple[str, str]]] = {
+        sn: set() for sn in coordinator.inverter_sns
+    }
 
     @callback
     def _discover_new_fields() -> None:
@@ -363,7 +393,11 @@ class VidaGridRawDataSensor(CoordinatorEntity[VidaGridCoordinator], SensorEntity
     _attr_entity_registry_enabled_default = False
 
     def __init__(
-        self, coordinator: VidaGridCoordinator, entry: ConfigEntry, sn: str, section: str
+        self,
+        coordinator: VidaGridCoordinator,
+        entry: ConfigEntry,
+        sn: str,
+        section: str,
     ) -> None:
         super().__init__(coordinator)
         self._sn = sn
