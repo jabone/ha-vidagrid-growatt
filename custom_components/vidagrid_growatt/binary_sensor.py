@@ -19,8 +19,8 @@ from .coordinator import VidaGridCoordinator
 
 # Observed values on the portal UI were the strings "On-Grid" / "Off-Grid".
 # Kept as a set in case the API instead returns booleans or different casing.
-_ON_GRID_TRUE_VALUES = {"on-grid", "ongrid", "on", "true", "1", True, 1}
-_ON_GRID_FALSE_VALUES = {"off-grid", "offgrid", "off", "false", "0", False, 0}
+_ON_GRID_TRUE_VALUES = {"on-grid", "ongrid", "on", "true", "1", True}
+_ON_GRID_FALSE_VALUES = {"off-grid", "offgrid", "off", "false", "0", False}
 
 
 async def async_setup_entry(
@@ -28,13 +28,16 @@ async def async_setup_entry(
 ) -> None:
     coordinator: VidaGridCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[Any] = [
-        VidaGridGridStatusSensor(coordinator, entry, sn) for sn in coordinator.inverter_sns
+        VidaGridGridStatusSensor(coordinator, entry, sn)
+        for sn in coordinator.inverter_sns
     ]
     entities.append(VidaGridRelaySessionSensor(coordinator, entry))
     async_add_entities(entities)
 
 
-class VidaGridGridStatusSensor(CoordinatorEntity[VidaGridCoordinator], BinarySensorEntity):
+class VidaGridGridStatusSensor(
+    CoordinatorEntity[VidaGridCoordinator], BinarySensorEntity
+):
     """On when the inverter reports On-Grid, off when Off-Grid, unknown otherwise.
 
     Unlike the Base Power grid sensor (see upstream PR #5), this defaults to
@@ -48,7 +51,9 @@ class VidaGridGridStatusSensor(CoordinatorEntity[VidaGridCoordinator], BinarySen
     _attr_name = "Grid Status"
     _attr_device_class = BinarySensorDeviceClass.POWER
 
-    def __init__(self, coordinator: VidaGridCoordinator, entry: ConfigEntry, sn: str) -> None:
+    def __init__(
+        self, coordinator: VidaGridCoordinator, entry: ConfigEntry, sn: str
+    ) -> None:
         super().__init__(coordinator)
         self._sn = sn
         self._attr_unique_id = f"{sn}_grid_status"
@@ -68,7 +73,9 @@ class VidaGridGridStatusSensor(CoordinatorEntity[VidaGridCoordinator], BinarySen
         raw_status = data["diagram"].get("grid_status")
         if raw_status is None:
             return None
-        normalized = raw_status.strip().lower() if isinstance(raw_status, str) else raw_status
+        normalized = (
+            raw_status.strip().lower() if isinstance(raw_status, str) else raw_status
+        )
         if normalized in _ON_GRID_TRUE_VALUES:
             return True
         if normalized in _ON_GRID_FALSE_VALUES:
@@ -83,7 +90,9 @@ class VidaGridGridStatusSensor(CoordinatorEntity[VidaGridCoordinator], BinarySen
         return {"raw_grid_status": data["diagram"].get("grid_status")}
 
 
-class VidaGridRelaySessionSensor(CoordinatorEntity[VidaGridCoordinator], BinarySensorEntity):
+class VidaGridRelaySessionSensor(
+    CoordinatorEntity[VidaGridCoordinator], BinarySensorEntity
+):
     """Problem sensor: on when the VidaGrid Relay's browser session is logged out.
 
     One entity per config entry rather than per inverter -- the relay's
